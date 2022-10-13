@@ -9,18 +9,25 @@ space, called FIeld REpresentation (FIRE). Each word $w$ is represented by a
 pair $[\mu, f]$, where $\mu$ is one or multiple locations, represented with a
 measure; $f: [-4,4]^2\to \mathbb{R}$ is a nonlinear function implemented by an
 individual small neural network for each word.  The similarity between two words
-is thus computed by a mutual integral between the words: $$ \text{sim}(w_1,w_2)
-= \int f_1~\mathrm{d}\mu_2 + \int f_2~\mathbb{d}\mu_1.$$
+is thus computed by a mutual integral between the words:
+
+$$
+\mathrm{sim}(w_1,w_2) = \int f_1~\mathrm{d}\mu_2 + \int f_2~\mathbb{d}\mu_1.
+$$
 
 FIRE represents word polysemy by the multimodality of $f$ and by the multiple
 locations of $\mu$; at the same time, FIRE preserves additive compositionality
-of semantics, which is represented as functional addition: $$ w_1+w_2 =
-[\mu_1+\mu_2, f_1+f_2]. $$ The similarity between two sentences $\Gamma_1$ and
-$\Gamma_2$ is thus computed with the word similarity between the words: $$
-\text{sim}(\Gamma_1, \Gamma_2) = \gamma_1^\text{T} \Sigma \gamma_1, $$ where
-$\gamma_1$ and $\gamma_2$ are weights assigned to the words in sentence 1 and 2,
-respectively; $\Sigma$ is the word similarity matrix: $\Sigma_{ij} =
-\text{sim}(w_i, w_j)$.
+of semantics, which is represented as functional addition:
+
+$$ w_1+w_2 = [\mu_1+\mu_2, f_1+f_2]. $$
+
+The similarity between two sentences $\Gamma_1$ and
+$\Gamma_2$ is thus computed with the word similarity between the words:
+
+$$ \mathrm{sim}(\Gamma_1, \Gamma_2) = \gamma_1^\mathrm{T} \Sigma \gamma_1, $$
+
+where $\gamma_1$ and $\gamma_2$ are weights assigned to the words in sentence 1 and 2,
+respectively; $\Sigma$ is the word similarity matrix: $\Sigma_{ij} = \mathrm{sim}(w_i, w_j)$.
 
 <figure>
 <p><img src="assets/img/bank.png" width = "70%" align=center>
