@@ -29,19 +29,19 @@ $$ \mathrm{sim}(\Gamma_1, \Gamma_2) = \gamma_1^\mathrm{T} \Sigma \gamma_2, $$
 where $\gamma_1$ and $\gamma_2$ are weights assigned to the words in sentence 1 and 2,
 respectively; $\Sigma$ is the word similarity matrix: $\Sigma_{ij} = \mathrm{sim}(w_i, w_j)$.
 
-<figure align="center">
+<div align="center">
 <img src="assets/img/bank.png" width = "70%">
-<figcaption>
+<p align="center">
 Words that are frequent and similar to the word `bank`, visualized in the semantic field of `bank`
-</figcaption>
-</figure>
+</p>
+</div>
 
-<figure align=center>
+<div align=center>
 <img src="assets/img/financial+river.png" width = "70%" align=center>
-<figcaption>
+<p align=center>
 Overlapped semantic fields of `river` and `financial`, and their locations. The shape resembles that of `bank` in the image above, indicating FIRE's property of compositionality.
-</figcaption>
-</figure>
+</p>
+</div>
 
 
 # Parallelization of neural networks
