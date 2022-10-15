@@ -5,8 +5,8 @@ python train.py \
     --lr=0.005 \
     --lr_scheduler=OneCycleLR \
     --dim=2 \
-    --n_iters=1000 \
-    --eval_interval=100000 \
+    --n_iters=100000 \
+    --eval_interval=1000 \
     --savedir=results/ \
     --optimizer=adamw \
     --seed=0 \

@@ -80,17 +80,20 @@ See `/data/wordnet-542.txt`
 
 We provide scripts in `/scripts/text8/` to train a FIRE model on the *text8* dataset.
 ```bash
-$ bash scripts/text8/1_download_text8.sh
 # download the *text8* corpus
+$ bash scripts/text8/1_download_text8.sh
 
-$ bash scripts/text8/2_tokenize.sh
 # tokenize the corpus with the NLTK tokenizer
+$ bash scripts/text8/2_tokenize.sh
 
-$ bash scripts/text8/3_build_vocab.sh
 # build a vocabulary with the tokenized corpus
+$ bash scripts/text8/3_build_vocab.sh
 
-$ bash scripts/text8/4_train.sh
 # training from scratch
+$ bash scripts/text8/4_train.sh
+# This would takes 2-3 hours, so it is recommended to run the process in the background.
+# For example:
+$ CUDA_VISIBLE_DEVICES=0 nohup bash scripts/text8/4_train.sh > log.train.log 2>&1 &
 ```
 
 The training is carried out with the SkipGram method.
