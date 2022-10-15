@@ -1,0 +1,18 @@
+python train.py \
+    --corpus_path=data/corpus/text8/text8.uncased.tokens \
+    --sz_batch=8192 \
+    --n_neg=1 \
+    --lr=0.005 \
+    --lr_scheduler=OneCycleLR \
+    --dim=2 \
+    --n_iters=1000 \
+    --eval_interval=100000 \
+    --savedir=results/ \
+    --optimizer=adamw \
+    --seed=0 \
+    --accum_steps=10 \
+    --func='MLPlanarDiv(args.dim, 4)' \
+    --measure='DiracMixture(args.dim, 10)' \
+    --weight_decay=1e-6 \
+    --use_wandb \
+    --amp
