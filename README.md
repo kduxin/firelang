@@ -74,3 +74,26 @@ We selected a [subset](/data/wordnet-542.txt) of the ["Core"
 WordNet](https://wordnet.princeton.edu/download/standoff-files) dataset and
 constructed a list of 542 strongly polysemeous / strongly monosemeous words.
 See `/data/wordnet-542.txt`
+
+
+# Training FIRE
+
+We provide scripts in `/scripts/text8/` to train a FIRE model on the *text8* dataset.
+```bash
+$ bash scripts/text8/1_download_text8.sh
+# download the *text8* corpus
+
+$ bash scripts/text8/2_tokenize.sh
+# tokenize the corpus with the NLTK tokenizer
+
+$ bash scripts/text8/3_build_vocab.sh
+# build a vocabulary with the tokenized corpus
+
+$ bash scripts/text8/4_train.sh
+# training from scratch
+```
+
+The training is carried out with the SkipGram method.
+For fast sampling from the tokenized corpus in the SkipGram way, we used
+another python package [`corpusit`](https://github.com/kduxin/corpusit)
+that is written in Rust (and binded with [PyO3](https://github.com/PyO3/pyo3)).
