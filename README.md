@@ -150,13 +150,13 @@ the evaluation of (neural-network) functions $f$, especially when each function 
 
 The usual way of using a neural network NN is to process a data batch at a time,
 that is the parallelization of $\text{NN}(x_1)$, $\text{NN}(x_2)$...  Recent
-advances in deep learning packages provide a new paradigm of parallelize the
+advances in deep learning packages provide a new paradigm to parallelize the
 computation of $\text{NN}_1(x)$, $\text{NN}_2(x)$...  such as the
 [vmap](https://pytorch.org/tutorials/prototype/vmap_recipe.html) method in JAX
 and PyTorch.
 
 In FIRE-based language models, we instead require the parallelization of both
-neural networks and data.  The desired behavior should include:
+neural networks and data.  The desired behaviors should include:
 - paired mode: output a vector. 
   - $\text{NN}_1(x_1)$, $\text{NN}_2(x_2)$, $\text{NN}_3(x_3)$...
 
@@ -182,7 +182,7 @@ words and recombine them into a new stacked function.
 ## Words as vectors
 
 For word-vector representations, `slicing` is natively supported
-for the matrix $V\in\mathbb{N\times D}$ whose columns are word vectors.
+for the matrix $V\in\mathbb{R}^{N\times D}$ whose rows are word vectors.
 The computation of the paired similarity is a batched inner product,
 and that of the cross similarity is simply a matrix multiplication.
 For example:
@@ -252,7 +252,7 @@ sim = model[["apple", "pear", "melon"]] @ model[["iphone", "fruit"]]     # (3, 2
 
 
 ## Combination of functions via arithmetics
-For the functions in a FIRE, we implemented operators to make the
+For the functions in a FIRE, we implemented arithmetic operators to make the
 (stacked) functions look more like a vector.
 
 For example, the regularization of the similarity scores by the following formula
