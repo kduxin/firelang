@@ -5,7 +5,7 @@ def parse_args():
 
     parser = ArgumentParser()
     parser.add_argument("--raw_path", type=str, default="data/corpus/text8/text8")
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--cased", action="store_true")
     parser.add_argument("--sos", type=str, default="<s>")
     parser.add_argument("--eos", type=str, default="</s>")
