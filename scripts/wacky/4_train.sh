@@ -1,0 +1,18 @@
+python -m scripts.train \
+    --corpus_path=data/corpus/wacky/wacky.txt.uncased.tokens \
+    --sz_batch=32768 \
+    --n_neg=1 \
+    --lr=0.005 \
+    --lr_scheduler=OneCycleLR \
+    --dim=2 \
+    --n_iters=600000 \
+    --eval_interval=1000 \
+    --savedir=results/ \
+    --optimizer=adamw \
+    --seed=0 \
+    --accum_steps=10 \
+    --func='MLPlanarDiv(args.dim, 4).neg()' \
+    --measure='DiracMixture(args.dim, 10)' \
+    --weight_decay=1e-6 \
+    --use_wandb \
+    --amp
