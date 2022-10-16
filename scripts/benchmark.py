@@ -1,4 +1,5 @@
 from typing import List, Mapping
+import argparse
 import os
 from collections.abc import Callable
 from collections import defaultdict, Counter
@@ -14,7 +15,7 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import DBSCAN
 from sklearn.metrics import accuracy_score
 
-from firelang.models.word import FIREWord
+from firelang.models import FIREWord
 from firelang.utils.log import logger
 from firelang.utils.timer import Timer
 from scripts.sentsim import sentsim_as_weighted_wordsim_cuda
@@ -669,11 +670,19 @@ if __name__ == "__main__":
 
     device = "cuda"
 
-    for checkpoint in [
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--checkpoints_for_similarity', nargs='+', default=[
         "checkpoints/wacky_mlplanardiv_d2_l4_k1_polysemy",
         "checkpoints/wacky_mlplanardiv_d2_l4_k10",
         "checkpoints/wacky_mlplanardiv_d2_l8_k20",
-    ]:
+    ])
+    parser.add_argument('--checkpoints_for_polysemy', nargs='+', default=[
+        "checkpoints/wacky_mlplanardiv_d2_l4_k1_polysemy",
+    ])
+    args = parser.parse_args()
+
+
+    for checkpoint in args.checkpoints_for_similarity:
         print(f"=============== Checkpoint `{checkpoint}` ================")
         model = torch.load(checkpoint, map_location=device)
 
@@ -701,10 +710,10 @@ if __name__ == "__main__":
         print("elapsed:", elapsed)
         print("\n\n\n")
 
-    checkpoint = "checkpoints/wacky_mlplanardiv_d2_l4_k1_polysemy"
-    print(f"========= Word polysemy detection with checkpoint `{checkpoint}` =========")
-    w2nsense = load_numwordsense("data/wordnet-542.txt")
-    model = torch.load(checkpoint, map_location=device)
-    acc, corr = benchmark_wordsense_number(model, w2nsense, eps=0.40)
-    print(f"Accuracy = {acc*100:.3g}%, Pearson Correlation Coefficient = {corr:.3g}")
-    print()
+    for checkpoint in args.checkpoints_for_polysemy:
+        print(f"========= Word polysemy detection with checkpoint `{checkpoint}` =========")
+        w2nsense = load_numwordsense("data/wordnet-542.txt")
+        model = torch.load(checkpoint, map_location=device)
+        acc, corr = benchmark_wordsense_number(model, w2nsense, eps=0.40)
+        print(f"Accuracy = {acc*100:.3g}%, Pearson Correlation Coefficient = {corr:.3g}")
+        print()
