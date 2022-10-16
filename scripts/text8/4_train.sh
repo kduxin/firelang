@@ -1,4 +1,4 @@
-python train.py \
+python -m scripts.train \
     --corpus_path=data/corpus/text8/text8.uncased.tokens \
     --sz_batch=8192 \
     --n_neg=1 \
