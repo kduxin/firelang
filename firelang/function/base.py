@@ -59,7 +59,7 @@ class Functional(StackingSlicing):
                 operator=op.mul,
             )
         elif isinstance(other, firelang.Measure):
-            return other.integral(self)
+            return other.integral(self, sum=False)
         else:
             raise TypeError(
                 f"`other` must be a float or Functional or Measure object, not {type(other)}."

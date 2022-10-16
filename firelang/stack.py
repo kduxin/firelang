@@ -115,7 +115,7 @@ class StackingSlicing(Module):
             while len(_cache[tag]) > max_cached_copies:
                 _cache[tag].popitem(last=False)  # pop the earliest
 
-        return new
+        return new.to(self.detect_device())
 
     stack = restack
 

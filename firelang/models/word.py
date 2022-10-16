@@ -176,9 +176,9 @@ class FIREWordSlice:
         funcs, measures = self
         funcs_other, measures_other = other
         if id(other) == id(self):
-            return measures.integral(funcs) * 2
+            return measures.integral(funcs, sum=False) * 2
         else:
-            return measures_other.integral(funcs) + measures.integral(funcs_other)
+            return measures_other.integral(funcs, sum=False) + measures.integral(funcs_other, sum=False)
 
     def __matmul__(self, other: FIREWordSlice):
         funcs, measures = self
