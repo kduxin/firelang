@@ -194,7 +194,7 @@ class FIREWordSlice:
 
     def __repr__(self):
         return (
-            f"<(func={self.funcs.__class__.__name__}, "
-            f"measure={self.measures.__class__.__name__}), "
+            f"<(funcs={self.funcs.__class__.__name__}, "
+            f"measures={self.measures.__class__.__name__}), "
             f"stack_size={len(self.measures)}>"
         )
