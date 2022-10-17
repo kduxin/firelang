@@ -17,7 +17,6 @@ from torch.optim import AdamW, Adam, SGD, Adagrad
 from torch.optim.lr_scheduler import OneCycleLR
 from torch.cuda.amp import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
-from torch.nn.utils import clip_grad_norm_
 
 from corpusit import Vocab, SkipGramDataset
 from firelang import FIREWord
@@ -164,7 +163,6 @@ def train(args):
 
     best_iter, best_simscore, best_loss = -1, 0, float("Inf")
     best_savepath = f"{args.savedir}/best"
-    grad_norm = 0.0
     for i in range(1, args.n_iters + 1):
 
         with Timer(elapsed, "prepare", sync_cuda=True):
@@ -200,7 +198,11 @@ def train(args):
             else:
                 steploss.backward()
             # do not clip, only for acquiring the gradient norm.
-            grad_norm = clip_grad_norm_(model.parameters(), sys.float_info.max)
+            grad_norm = (
+                torch.cat([p.grad.data.reshape(-1) for p in model.parameters()])
+                .norm()
+                .item()
+            )
 
         if args.profile:
             logger.debug("----- backward -----")
