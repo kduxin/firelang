@@ -58,6 +58,14 @@ naturally separated with FIRE.  Figure (right): overlapped semantic fields of
   $ pip install -r requirements-cu10.txt
   ```
 
+- NLTK
+  You may need to download the NTLK `punkt` package.
+  To do that, please run python and execute the following:
+  ```python
+  >>> import nltk
+  >>> nltk.download('punkt')
+  ```
+
 - If you are using Windows or MacOS, you need to install the Rust compiling toolchain
   ([cargo](https://www.rust-lang.org/tools/install)) in advance,
   which is used to compile the `corpusit` package from source.
