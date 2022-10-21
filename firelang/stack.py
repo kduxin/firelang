@@ -38,14 +38,23 @@ class StackingSlicing(Module):
         self.stack_size = locals_["stack_size"]
         self.unsliceable_params = set(unsliceable_params)
 
+    def register_extra_init_kwargs(self, **kwargs):
+        for key, val in kwargs.items():
+            self.init_locals[key] = val
+
+    def register_extra_unsliceable_params(self, *names):
+        for name in names:
+            self.unsliceable_params.add(name)
+
     def _sanity_check(self):
         assert (
             type(self) != StackingSlicing
         ), "StackingSlicing must be initialized from a subclass"
 
-        assert "stack_size" in self.init_locals, \
-            "A `StackingSlicing` subclass must accept `stack_size` as an " \
+        assert "stack_size" in self.init_locals, (
+            "A `StackingSlicing` subclass must accept `stack_size` as an "
             "initialization argument."
+        )
 
     def __getitem__(self, ids: Tensor):
         """
@@ -74,9 +83,19 @@ class StackingSlicing(Module):
             if isinstance(module, StackingSlicing):
                 submod_from: Module = module[ids]
             elif isinstance(module, ModuleList):
-                submod_from = ModuleList([entry[ids] for entry in module])
+                submod_from = ModuleList(
+                    [
+                        entry[ids] if isinstance(entry, StackingSlicing) else entry
+                        for entry in module
+                    ]
+                )
             elif isinstance(module, ModuleDict):
-                submod_from = ModuleDict({key: entry[ids] for key, entry in module})
+                submod_from = ModuleDict(
+                    {
+                        key: entry[ids] if isinstance(entry, StackingSlicing) else entry
+                        for key, entry in module.items()
+                    }
+                )
             else:
                 submod_from: Module = module
             submod_from.stack_size = new_stack_size
