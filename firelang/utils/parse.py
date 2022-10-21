@@ -7,7 +7,7 @@ __all__ = ["parse_func", "parse_measure"]
 def parse_func(name: str, args: Namespace = Namespace(), **kwargs):
     locals().update(args.__dict__)
     locals().update(kwargs)
-    segs = name.split("+")
+    segs = name.split("->")
     funcsegs = []
 
     for nameseg in segs:
