@@ -188,12 +188,14 @@ def train(args):
                     loss = model.loss_skipgram(
                         inputs,
                         labels,
+                        args,
                     )
                 elif args.model == "PFIREWord":
                     model: PFIREWord
                     loss = model.loss_skipgram(
                         inputs,
                         labels,
+                        args,
                     )
                 else:
                     raise ValueError(args.model)
@@ -549,6 +551,42 @@ def parse_arguments():
         type=int,
         default=1000,
         help="model is evaluated every 20 iterations and the snapshot is saved.",
+    )
+    parser.add_argument(
+        "--sinkhorn_weight",
+        type=float,
+        default=0.0,
+        help="Weight of the Sinkhorn distance term in the total loss.",
+    )
+    parser.add_argument(
+        "--sinkhorn_reg",
+        type=float,
+        default=1.0,
+        help="Weight on the regularization term in the Sinkhorn distance",
+    )
+    parser.add_argument(
+        "--sinkhorn_max_iter",
+        type=int,
+        default=50,
+        help="A parameter of the Sinkhorn distance term that limits the number of estimating iterations.",
+    )
+    parser.add_argument(
+        "--sinkhorn_p",
+        type=float,
+        default=2.0,
+        help="Norm dimension of the Sinkhorn distance.",
+    )
+    parser.add_argument(
+        "--sinkhorn_tau",
+        type=float,
+        default=1e3,
+        help="Used for stablization of the Sinkhorn computation.",
+    )
+    parser.add_argument(
+        "--sinkhorn_stop_threshold",
+        type=float,
+        default=1e-2,
+        help="Controlling stop of the Sinkhorn iteration.",
     )
 
     # ----- miscellaneous -----

@@ -9,7 +9,7 @@ from torch.nn import Module, functional as F
 from firelang.measure import Measure
 from firelang.function import Functional
 from firelang.stack import StackingSlicing
-from firelang.measure import DiracMixture
+from firelang.measure import DiracMixture, metrics
 from firelang.utils.timer import Timer, elapsed
 from firelang.utils.optim import Loss
 
@@ -139,9 +139,7 @@ class FIREWord(Module):
         return outputs
 
     def loss_skipgram(
-        self,
-        pairs: Tensor,
-        labels: Tensor,
+        self, pairs: Tensor, labels: Tensor, args: Namespace = Namespace()
     ) -> Loss:
         """Noise contrastive estimation loss for the SkipGram task.
 
@@ -163,6 +161,19 @@ class FIREWord(Module):
             logits, labels.float(), reduction="none"
         )
         loss.add("sim", loss_sim)
+
+        if hasattr(args, "sinkhorn_weight") and args.sinkhorn_weight > 0.0:
+            s = metrics.sinkhorn(
+                measure1,
+                measure2,
+                reg=args.sinkhorn_reg,
+                max_iter=args.sinkhorn_max_iter,
+                p=args.sinkhorn_p,
+                tau=args.sinkhorn_tau,
+                stop_threshold=args.sinkhorn_stop_threshold,
+            )  # (n,)
+            s[~labels] = -s[~labels]
+            loss.add("sinkhorn", s * args.sinkhorn_weight)
 
         return loss
 
