@@ -15,9 +15,9 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import DBSCAN
 from sklearn.metrics import accuracy_score
 
-from firelang.models import FIREWord
+from firelang.models import FIREWord, PFIREWord
 from firelang.utils.log import logger
-from firelang.utils.timer import Timer
+from firelang.utils.timer import Timer, elapsed
 from scripts.sentsim import sentsim_as_weighted_wordsim_cuda
 
 
@@ -37,9 +37,6 @@ __all__ = [
     "benchmark_sentence_similarity",
     "benchmark_word_in_context",
 ]
-
-
-elapsed = {}
 
 
 class SimilarityBenchmark:
@@ -213,6 +210,7 @@ _cache = defaultdict(dict)
 
 
 @torch.no_grad()
+@Timer(elapsed, "wordsim")
 def benchmark_word_similarity(
     model: FIREWord, benchmarks: Mapping[str, SimilarityBenchmark]
 ):
@@ -248,7 +246,7 @@ def benchmark_word_similarity(
             _cache[f"oov_reported/{bname}"] = True
 
         """ similarity """
-        with Timer(elapsed, "wordsim/similarity", sync_cuda=True):
+        with Timer(elapsed, "similarity", sync_cuda=True):
             func1, measure1 = model.forward(pairs[..., 0])
             func2, measure2 = model.forward(pairs[..., 1])
             preds = measure1.integral(func2 - func1) + measure2.integral(func1 - func2)
@@ -267,7 +265,7 @@ def benchmark_word_similarity(
             mean, std = sims.mean(dim=1), sims.std(dim=1)
             return mean, std
 
-        with Timer(elapsed, "wordsim/smooth", sync_cuda=True):
+        with Timer(elapsed, "smooth", sync_cuda=True):
             allids = torch.cat([pairs[:, 0], pairs[:, 1]], dim=0)
             funcall, measall = model(allids)
 
@@ -278,6 +276,59 @@ def benchmark_word_similarity(
                 sims1std * sims2std
             ) ** 0.5
             preds = preds.exp()
+            preds = preds.data.cpu().numpy()
+
+        """ spearmann """
+        r = spearmanr(labels, preds)
+        scores[bname] = r.correlation
+    return pd.Series(scores)
+
+
+@torch.no_grad()
+@Timer(elapsed, "wordsim")
+def benchmark_word_similarity_pfire(
+    model: PFIREWord, benchmarks: Mapping[str, SimilarityBenchmark]
+):
+    vocab: Vocab = model.vocab
+    device = model.detect_device()
+
+    scores = {}
+    for bname, benchmark in benchmarks.items():
+        benchmark: SimilarityBenchmark
+
+        pairs, pairs_str, labels = [], [], []
+        oov_words = set()
+        for (word1, word2, wseq1, wseq2, sim) in iter(benchmark):
+            pairs_str.append((word1, word2))
+            labels.append(sim)
+
+            pair = []
+            for w in [word1, word2]:
+                pair.append(vocab.s2i.get(w, vocab.unk_id))
+                if w not in vocab:
+                    oov_words.add(w)
+            pairs.append(pair)
+
+        labels = np.array(labels)
+        pairs = torch.tensor(pairs, device=device, dtype=torch.long)
+
+        if len(oov_words) and not _cache.get(f"oov_reported/{bname}", False):
+            logger.warning(
+                f"Benchmark {bname}: {len(oov_words)} words "
+                f"(in {len(benchmark)} pairs) out of vocabulary\n"
+                + ", ".join(list(oov_words))
+            )
+            _cache[f"oov_reported/{bname}"] = True
+
+        """ similarity """
+        with Timer(elapsed, "similarity", sync_cuda=True):
+
+            g1 = model.grids_byid(pairs[..., 0])
+            g2 = model.grids_byid(pairs[..., 1])
+            innerprod = (g1 * g2).sum(-1)
+            norm1 = (g1 * g1).sum(-1)
+            norm2 = (g2 * g2).sum(-1)
+            preds = innerprod / (norm1 * norm2) ** 0.5
             preds = preds.data.cpu().numpy()
 
         """ spearmann """
@@ -406,6 +457,7 @@ def load_all_sentsim_benchmarks(dirpath=DEFAULT_SENTSIM_DIR, lower=True):
 
 
 @torch.no_grad()
+@Timer(elapsed, "sentsim")
 def benchmark_sentence_similarity(
     model: FIREWord,
     benchmarks: Mapping[str, SimilarityBenchmark],
@@ -432,11 +484,11 @@ def benchmark_sentence_similarity(
         ]
 
         """ similarity """
-        with Timer(elapsed, "sentsim/similarity", sync_cuda=True):
+        with Timer(elapsed, "similarity", sync_cuda=True):
             simmat = sentence_simmat(model, allsents, sif_weights)
 
         """ regularization: sim(i,j) <- sim(i,j) - 0.5 * (sim(i,i) + sim(j,j)) """
-        with Timer(elapsed, "sentsim/regularization"):
+        with Timer(elapsed, "regularization"):
             diag = np.diag(simmat)
             simmat = simmat - 0.5 * (diag.reshape(-1, 1) + diag.reshape(1, -1))
 
@@ -447,7 +499,7 @@ def benchmark_sentence_similarity(
             simmat = simmat / (scale * scale.T) ** 0.5
             return simmat
 
-        with Timer(elapsed, "sentsim/smooth"):
+        with Timer(elapsed, "smooth"):
             simmat = _simmat_rescale(simmat)
             simmat = np.exp(simmat)
 
@@ -532,6 +584,7 @@ def load_all_wic_benchmarks(
 
 
 @torch.no_grad()
+@Timer(elapsed, "wic")
 def benchmark_word_in_context(
     model, benchmarks: Mapping[str, WordInContextBenchmark], sif_alpha=1e-3
 ):
@@ -557,16 +610,16 @@ def benchmark_word_in_context(
         ]
 
         """ similarity """
-        with Timer(elapsed, "wic/similarity", sync_cuda=True):
+        with Timer(elapsed, "similarity", sync_cuda=True):
             simmat = sentence_simmat(model, allsents, sif_weights)
 
         """ regularization: sim(i,j) <- sim(i,j) - 0.5 * (sim(i,i) + sim(j,j)) """
-        with Timer(elapsed, "wic/regularization"):
+        with Timer(elapsed, "regularization"):
             diag = np.diag(simmat)
             simmat = simmat - 0.5 * (diag.reshape(-1, 1) + diag.reshape(1, -1))
 
         """ smoothing by standardization """
-        with Timer(elapsed, "wic/smooth"):
+        with Timer(elapsed, "smooth"):
             mean1 = np.mean(simmat, axis=1, keepdims=True)
             std1 = np.std(simmat, axis=1, keepdims=True)
             mean0 = np.mean(simmat, axis=0, keepdims=True)
@@ -624,6 +677,7 @@ def get_relwordpos(allmeasures, model, centerword, k=1000, pca=False):
 
 
 @torch.no_grad()
+@Timer(elapsed, "wordsense")
 def benchmark_wordsense_number(
     model: FIREWord,
     w2nsense,
@@ -671,18 +725,26 @@ if __name__ == "__main__":
     device = "cuda"
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoints_for_similarity', nargs='+', default=[
+    parser.add_argument(
+        "--checkpoints_for_similarity",
+        nargs="+",
+        default=[
         "checkpoints/wacky_mlplanardiv_d2_l4_k1_polysemy",
         "checkpoints/wacky_mlplanardiv_d2_l4_k10",
         "checkpoints/wacky_mlplanardiv_d2_l8_k20",
-    ])
-    parser.add_argument('--checkpoints_for_polysemy', nargs='+', default=[
+        ],
+    )
+    parser.add_argument(
+        "--checkpoints_for_polysemy",
+        nargs="+",
+        default=[
         "checkpoints/wacky_mlplanardiv_d2_l4_k1_polysemy",
-    ])
+        ],
+    )
     args = parser.parse_args()
 
-
     for checkpoint in args.checkpoints_for_similarity:
+        elapsed.clear()
         print(f"=============== Checkpoint `{checkpoint}` ================")
         model = torch.load(checkpoint, map_location=device)
 
@@ -707,13 +769,21 @@ if __name__ == "__main__":
         print(scores)
         print()
 
-        print("elapsed:", elapsed)
+        print("elapsed:\n", elapsed.format())
         print("\n\n\n")
 
     for checkpoint in args.checkpoints_for_polysemy:
-        print(f"========= Word polysemy detection with checkpoint `{checkpoint}` =========")
+        elapsed.clear()
+        print(
+            f"========= Word polysemy detection with checkpoint `{checkpoint}` ========="
+        )
         w2nsense = load_numwordsense("data/wordnet-542.txt")
         model = torch.load(checkpoint, map_location=device)
         acc, corr = benchmark_wordsense_number(model, w2nsense, eps=0.40)
-        print(f"Accuracy = {acc*100:.3g}%, Pearson Correlation Coefficient = {corr:.3g}")
+        print(
+            f"Accuracy = {acc*100:.3g}%, Pearson Correlation Coefficient = {corr:.3g}"
+        )
         print()
+
+        print("elapsed:\n", elapsed.format())
+        print("\n\n\n")

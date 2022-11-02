@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import List
 import argparse
 import os
@@ -19,7 +20,7 @@ from torch.cuda.amp import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 
 from corpusit import Vocab, SkipGramDataset
-from firelang import FIREWord
+from firelang import FIREWord, PFIREWord
 from firelang.utils.parse import parse_func, parse_measure
 from firelang.utils.optim import DummyScheduler
 from firelang.utils.log import logger
@@ -29,6 +30,7 @@ from scripts.benchmark import (
     ALL_WORDSIM_BENCHMARKS,
     load_word_benchmark,
     benchmark_word_similarity,
+    benchmark_word_similarity_pfire,
 )
 
 
@@ -44,12 +46,10 @@ except Exception as e:
         "Consider executing `pip install wandb`."
     )
 
-
-_total_elapsed = {}
-_total_timer = Timer(_total_elapsed, "total")
+total_timer = Timer(elapsed, "total")
 
 
-@_total_timer
+@total_timer
 def train(args):
     if args.use_wandb:
         config()
@@ -100,6 +100,13 @@ def train(args):
                 func_template,
                 measure_template,
                 args.dim,
+                vocab,
+            )
+        elif args.model == "PFIREWord":
+            model = PFIREWord(
+                func_template,
+                args.grid_limits,
+                args.grid_dim_sizes,
                 vocab,
             )
         else:
@@ -182,6 +189,12 @@ def train(args):
                         inputs,
                         labels,
                     )
+                elif args.model == "PFIREWord":
+                    model: PFIREWord
+                    loss = model.loss_skipgram(
+                        inputs,
+                        labels,
+                    )
                 else:
                     raise ValueError(args.model)
             else:
@@ -197,7 +210,6 @@ def train(args):
                 scaler.scale(steploss).backward()
             else:
                 steploss.backward()
-            # do not clip, only for acquiring the gradient norm.
             grad_norm = (
                 torch.cat([p.grad.data.reshape(-1) for p in model.parameters()])
                 .norm()
@@ -209,18 +221,29 @@ def train(args):
             logger.debug(prof.key_averages().table(sort_by="self_cpu_time_total"))
         """ ----------------- optim -------------------"""
         if i % args.accum_steps == 0:
-            with Timer(elapsed, "optim/step", sync_cuda=True):
-                if args.amp:
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    optimizer.step()
+            with Timer(elapsed, "optim", sync_cuda=True):
+                with Timer(elapsed, "step"):
+                    for name, p in model.named_parameters():
+                        isnan = p.grad.isnan()
+                        isinf = p.grad.isinf()
+                        isinvalid = isnan | isinf
+                        if isinvalid.any():
+                            p.grad.masked_fill_(isinvalid, 0)
+                            p[isinvalid].normal_(0, 0.1)
+                            print(f"Fixed nan/inf values in grad of {name}")
+                            print(f"  grad = {p.grad}")
 
-            with Timer(elapsed, "optim/lrstep", sync_cuda=True):
-                scheduler.step()
+                    if args.amp:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
 
-            with Timer(elapsed, "optim/zerograd", sync_cuda=True):
-                model.zero_grad()
+                with Timer(elapsed, "lrstep", sync_cuda=True):
+                    scheduler.step()
+
+                with Timer(elapsed, "zerograd", sync_cuda=True):
+                    model.zero_grad()
 
         if i % args.eval_interval == 0:
 
@@ -229,13 +252,24 @@ def train(args):
 
             """--------------- similarity benchmark ---------------"""
             with Timer(elapsed, "benchmark", sync_cuda=True):
-                simscores = (
-                    benchmark_word_similarity(
-                        model,
-                        benchmarks,
+                if args.model == "FIREWord":
+                    simscores = (
+                        benchmark_word_similarity(
+                            model,
+                            benchmarks,
+                        )
+                        * 100
                     )
-                    * 100
-                )
+                elif args.model == "PFIREWord":
+                    simscores = (
+                        benchmark_word_similarity_pfire(
+                            model,
+                            benchmarks,
+                        )
+                        * 100
+                    )
+                else:
+                    raise ValueError(args.model)
             simscore = simscores.mean()
             if simscore > best_simscore:
                 best_iter = i
@@ -256,9 +290,8 @@ def train(args):
                 f"meansim={simscore:.3f}%"
             )
             logger.debug(simscores.to_string(float_format="%5.1f"))
-            _print_elapsed(elapsed)
-            _total_timer.update()
-            _print_elapsed(_total_elapsed)
+            total_timer.update()
+            logger.debug("-- Elapsed --\n" + elapsed.format(thresh=0.8))
 
             if args.use_wandb:
                 loginfo = {
@@ -273,6 +306,8 @@ def train(args):
                     """---------------- visualize ----------------"""
                     if args.model == "FIREWord":
                         fig = visualize_fire(model, args.plot_words)
+                    elif args.model == "PFIREWord":
+                        fig = visualize_pfire(model, args.plot_words)
                     else:
                         raise ValueError(args.model)
                     img = wandb.Image(_fig2array(fig))
@@ -297,25 +332,6 @@ def train(args):
                 "eval/best_savepath": best_savepath,
             }
         )
-
-
-def _print_elapsed(elapsed, thresh=0.8):
-    elapsed = sorted(elapsed.items(), key=lambda x: x[1], reverse=True)
-    total = sum([t for name, t in elapsed])
-    cum = 0
-    lines = []
-    for name, t in elapsed:
-        line = f"{name:<20} {t:>8.2f}"
-        lines.append(line)
-        cum += t
-        if cum >= total * thresh:
-            break
-    lines = sorted(lines)
-    s = "-- Elapsed --\n" + "\n".join(lines)
-    other_time = total - cum
-    if other_time >= 1.0:
-        s += f'\n{"others":<20} {other_time:>8.2f}'
-    logger.debug(s)
 
 
 def set_seed(seed):
@@ -352,12 +368,15 @@ def visualize_fire(model: FIREWord, words: List[str], r: float = 4):
     # positions: (stack_size, n, dim)
     # weights:   (stack_size, n)
 
-    if hasattr(measure, "range") and measure.range is not None:
-        r = measure.range
-    xmax = max(r, positions[:, :, 0].max().item())
-    xmin = min(-r, positions[:, :, 0].min().item())
-    ymax = max(r, positions[:, :, 1].max().item())
-    ymin = min(-r, positions[:, :, 1].min().item())
+    if measure.limits is not None:
+        xmin, xmax = measure.limits[0].data.cpu().numpy().tolist()
+        ymin, ymax = measure.limits[1].data.cpu().numpy().tolist()
+    else:
+        xmax, xmin, ymax, ymin = r, -r, r, -r
+    xmax = max(xmax, positions[:, :, 0].max().item())
+    xmin = min(xmin, positions[:, :, 0].min().item())
+    ymax = max(ymax, positions[:, :, 1].max().item())
+    ymin = min(ymin, positions[:, :, 1].min().item())
 
     xmesh, ymesh = torch.meshgrid(
         torch.linspace(xmin, xmax, 100), torch.linspace(ymin, ymax, 100)
@@ -391,6 +410,33 @@ def visualize_fire(model: FIREWord, words: List[str], r: float = 4):
     return fig
 
 
+@torch.no_grad()
+def visualize_pfire(model: PFIREWord, words):
+    limits = model.limits
+    meshx, meshy = torch.meshgrid(
+        torch.linspace(*limits[0], 100), torch.linspace(*limits[1], 100)
+    )
+    grids = model.grids(words, reshape=True, meshx=meshx, meshy=meshy)  # (stack, n, n)
+
+    grids = grids.data.cpu().numpy()  # (stack, n, n)
+    meshx = meshx.data.cpu().numpy()
+    meshy = meshy.data.cpu().numpy()
+
+    naxes = len(words)
+    ncols = 8
+    fig = plt.figure(figsize=(4 * ncols / (ncols - 1), 4 * naxes))
+    gs = fig.add_gridspec(naxes, ncols)
+    for i, (word, grid) in enumerate(zip(words, grids)):
+        ax = fig.add_subplot(gs[i, : ncols - 1])
+        ax.set_title(word)
+        cont = ax.contourf(meshx, meshy, grid)
+        ax = fig.add_subplot(gs[i, -1])
+        fig.colorbar(cont, cax=ax)
+
+    fig.subplots_adjust(right=0.8)
+    return fig
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
@@ -410,7 +456,9 @@ def parse_arguments():
         type=str,
         default=None,
     )
-    parser.add_argument("--model", type=str, default="FIREWord", choices=["FIREWord"])
+    parser.add_argument(
+        "--model", type=str, default="FIREWord", choices=["FIREWord", "PFIREWord"]
+    )
     parser.add_argument("--task", type=str, default="skipgram", choices=["skipgram"])
 
     # ----- fire model settings -----
@@ -430,6 +478,9 @@ def parse_arguments():
         default="",
         help="concat of `func` and `measure` with sep=@@. For example: `MLPlanarDiv(dim, 4)@@DiracMixture(dim, 10)`",
     )
+
+    parser.add_argument("--grid_limits", type=str, default="[-4.0, 4.0]")
+    parser.add_argument("--grid_dim_sizes", type=str, default="8")
 
     # ----- skipgram parameters -----
     parser.add_argument(
@@ -542,6 +593,9 @@ def parse_arguments():
 
     if args.func_measure:
         args.func, args.measure = args.func_measure.split("@@")
+
+    args.grid_limits = eval(args.grid_limits)
+    args.grid_dim_sizes = eval(args.grid_dim_sizes)
 
     return args
 
