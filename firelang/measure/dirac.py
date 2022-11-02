@@ -1,8 +1,14 @@
+from __future__ import annotations
+from typing import List, Tuple
 import torch
+from torch import Tensor
 from torch.nn import Parameter
 from .base import Measure
+from firelang.utils.limits import parse_rect_limits
 
-__all__ = ["DiracMixture"]
+__all__ = [
+    "DiracMixture",
+]
 
 
 class DiracMixture(Measure):
@@ -13,20 +19,22 @@ class DiracMixture(Measure):
         self,
         dim: int,
         k: int,
-        range: float = None,
+        limits: float | Tuple[float, float] | List[Tuple[float, float]] = None,
         mfix: bool = False,
         stack_size: int = 1,
     ):
         Measure.__init__(self, locals())
-        assert range is None or range > 0
-        self._x = (
-            Parameter(torch.randn(stack_size, k, dim, dtype=torch.float32))
-            if range is None
-            else Parameter(
-                torch.rand(stack_size, k, dim, dtype=torch.float32) * (2 * range)
-                - range
+        if limits is None:
+            self._x = Parameter(torch.randn(stack_size, k, dim, dtype=torch.float32))
+        else:
+            limits = torch.tensor(
+                parse_rect_limits(limits, dim), dtype=torch.float32
+            )  # (dim, 2)
+            ranges = (limits[:, 1] - limits[:, 0])[None, None]  # (1, 1, dim)
+            starts = limits[:, 0][None, None]  # (1, 1, dim)
+            self._x = Parameter(
+                torch.rand(stack_size, k, dim, dtype=torch.float32) * ranges + starts
             )
-        )
         self._m = (
             1.0 if mfix else Parameter(torch.ones(stack_size, k, dtype=torch.float32))
         )
@@ -34,7 +42,7 @@ class DiracMixture(Measure):
         self.dim = dim
         self.k = k
         self.stack_size = stack_size
-        self.range = range
+        self.limits = limits
         self.mfix = mfix
 
     def integral(self, func, cross=False, batch_size=1000000, sum=True):
@@ -64,8 +72,20 @@ class DiracMixture(Measure):
         return res
 
     def get_x(self):
-        if hasattr(self, "range") and self.range is not None:
-            return torch.tanh(self._x / self.range) * self.range
+        # _x: (stack_size, k, dim)
+        if self.limits is not None:
+            limits = self.limits.to(self.detect_device())
+            ranges = (limits[:, 1] - limits[:, 0])[None, None]  # (1, 1, dim)
+            _x = self._x / (ranges / 2)
+            _x = torch.tanh(_x)
+            _x = _x * (ranges / 2)
+
+            if _x.isnan().any():
+                print(f"_x has NaN: {_x}")
+                print(f"self._x has NaN ?: {self._x.isnan().any()}")
+                print(f"ranges: {ranges}")
+                exit()
+            return _x
         else:
             return self._x
 
@@ -74,7 +94,10 @@ class DiracMixture(Measure):
         return self.get_x()
 
     def get_m(self):
-        return self._m
+        if isinstance(self._m, Tensor):
+            return self._m.abs()
+        else:
+            return self._m
 
     @property
     def m(self):
@@ -86,12 +109,18 @@ class DiracMixture(Measure):
         segs.append(f", k={self.k}")
         if self.mfix:
             segs.append(f", m=1.0")
-        if self.range is not None:
-            segs.append(f", range=[-{self.range}, {self.range}]")
+
+        if self.limits is not None:
+            limits = self.limits.data.cpu().numpy().tolist()
+        else:
+            limits = None
+        if limits is not None:
+            segs.append(f", limits={limits}")
         segs.append(")")
         return "".join(segs)
 
     def _parameter_shape_hash(self):
-        return hash(
-            Measure._parameter_shape_hash(self) + hash(self.mfix) + hash(self.range)
-        )
+        hsh = Measure._parameter_shape_hash(self)
+        hsh += hash(self.mfix)
+        hsh += hash(self.limits)
+        return hash(hsh)
