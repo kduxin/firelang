@@ -341,12 +341,15 @@ def visualize_fire(model: FIREWord, words: List[str], r: float = 4):
     # positions: (stack_size, n, dim)
     # weights:   (stack_size, n)
 
-    if hasattr(measure, "range") and measure.range is not None:
-        r = measure.range
-    xmax = max(r, positions[:, :, 0].max().item())
-    xmin = min(-r, positions[:, :, 0].min().item())
-    ymax = max(r, positions[:, :, 1].max().item())
-    ymin = min(-r, positions[:, :, 1].min().item())
+    if measure.limits is not None:
+        xmin, xmax = measure.limits[0].data.cpu().numpy().tolist()
+        ymin, ymax = measure.limits[1].data.cpu().numpy().tolist()
+    else:
+        xmax, xmin, ymax, ymin = r, -r, r, -r
+    xmax = max(xmax, positions[:, :, 0].max().item())
+    xmin = min(xmin, positions[:, :, 0].min().item())
+    ymax = max(ymax, positions[:, :, 1].max().item())
+    ymin = min(ymin, positions[:, :, 1].min().item())
 
     xmesh, ymesh = torch.meshgrid(
         torch.linspace(xmin, xmax, 100), torch.linspace(ymin, ymax, 100)
