@@ -17,7 +17,7 @@ from sklearn.metrics import accuracy_score
 
 from firelang.models import FIREWord
 from firelang.utils.log import logger
-from firelang.utils.timer import Timer
+from firelang.utils.timer import Timer, elapsed
 from scripts.sentsim import sentsim_as_weighted_wordsim_cuda
 
 
@@ -37,9 +37,6 @@ __all__ = [
     "benchmark_sentence_similarity",
     "benchmark_word_in_context",
 ]
-
-
-elapsed = {}
 
 
 class SimilarityBenchmark:
@@ -248,7 +245,7 @@ def benchmark_word_similarity(
             _cache[f"oov_reported/{bname}"] = True
 
         """ similarity """
-        with Timer(elapsed, "wordsim/similarity", sync_cuda=True):
+        with Timer(elapsed, "similarity", sync_cuda=True):
             func1, measure1 = model.forward(pairs[..., 0])
             func2, measure2 = model.forward(pairs[..., 1])
             preds = measure1.integral(func2 - func1) + measure2.integral(func1 - func2)
@@ -267,7 +264,7 @@ def benchmark_word_similarity(
             mean, std = sims.mean(dim=1), sims.std(dim=1)
             return mean, std
 
-        with Timer(elapsed, "wordsim/smooth", sync_cuda=True):
+        with Timer(elapsed, "smooth", sync_cuda=True):
             allids = torch.cat([pairs[:, 0], pairs[:, 1]], dim=0)
             funcall, measall = model(allids)
 
@@ -406,6 +403,7 @@ def load_all_sentsim_benchmarks(dirpath=DEFAULT_SENTSIM_DIR, lower=True):
 
 
 @torch.no_grad()
+@Timer(elapsed, "sentsim")
 def benchmark_sentence_similarity(
     model: FIREWord,
     benchmarks: Mapping[str, SimilarityBenchmark],
@@ -432,11 +430,11 @@ def benchmark_sentence_similarity(
         ]
 
         """ similarity """
-        with Timer(elapsed, "sentsim/similarity", sync_cuda=True):
+        with Timer(elapsed, "similarity", sync_cuda=True):
             simmat = sentence_simmat(model, allsents, sif_weights)
 
         """ regularization: sim(i,j) <- sim(i,j) - 0.5 * (sim(i,i) + sim(j,j)) """
-        with Timer(elapsed, "sentsim/regularization"):
+        with Timer(elapsed, "regularization"):
             diag = np.diag(simmat)
             simmat = simmat - 0.5 * (diag.reshape(-1, 1) + diag.reshape(1, -1))
 
@@ -447,7 +445,7 @@ def benchmark_sentence_similarity(
             simmat = simmat / (scale * scale.T) ** 0.5
             return simmat
 
-        with Timer(elapsed, "sentsim/smooth"):
+        with Timer(elapsed, "smooth"):
             simmat = _simmat_rescale(simmat)
             simmat = np.exp(simmat)
 
@@ -532,6 +530,7 @@ def load_all_wic_benchmarks(
 
 
 @torch.no_grad()
+@Timer(elapsed, "wic")
 def benchmark_word_in_context(
     model, benchmarks: Mapping[str, WordInContextBenchmark], sif_alpha=1e-3
 ):
@@ -557,16 +556,16 @@ def benchmark_word_in_context(
         ]
 
         """ similarity """
-        with Timer(elapsed, "wic/similarity", sync_cuda=True):
+        with Timer(elapsed, "similarity", sync_cuda=True):
             simmat = sentence_simmat(model, allsents, sif_weights)
 
         """ regularization: sim(i,j) <- sim(i,j) - 0.5 * (sim(i,i) + sim(j,j)) """
-        with Timer(elapsed, "wic/regularization"):
+        with Timer(elapsed, "regularization"):
             diag = np.diag(simmat)
             simmat = simmat - 0.5 * (diag.reshape(-1, 1) + diag.reshape(1, -1))
 
         """ smoothing by standardization """
-        with Timer(elapsed, "wic/smooth"):
+        with Timer(elapsed, "smooth"):
             mean1 = np.mean(simmat, axis=1, keepdims=True)
             std1 = np.std(simmat, axis=1, keepdims=True)
             mean0 = np.mean(simmat, axis=0, keepdims=True)
@@ -624,6 +623,7 @@ def get_relwordpos(allmeasures, model, centerword, k=1000, pca=False):
 
 
 @torch.no_grad()
+@Timer(elapsed, "wordsense")
 def benchmark_wordsense_number(
     model: FIREWord,
     w2nsense,

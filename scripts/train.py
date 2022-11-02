@@ -44,12 +44,10 @@ except Exception as e:
         "Consider executing `pip install wandb`."
     )
 
-
-_total_elapsed = {}
-_total_timer = Timer(_total_elapsed, "total")
+total_timer = Timer(elapsed, "total")
 
 
-@_total_timer
+@total_timer
 def train(args):
     if args.use_wandb:
         config()
@@ -209,17 +207,28 @@ def train(args):
             logger.debug(prof.key_averages().table(sort_by="self_cpu_time_total"))
         """ ----------------- optim -------------------"""
         if i % args.accum_steps == 0:
-            with Timer(elapsed, "optim/step", sync_cuda=True):
+            with Timer(elapsed, "optim", sync_cuda=True):
+                with Timer(elapsed, "step"):
+                    for name, p in model.named_parameters():
+                        isnan = p.grad.isnan()
+                        isinf = p.grad.isinf()
+                        isinvalid = isnan | isinf
+                        if isinvalid.any():
+                            p.grad.masked_fill_(isinvalid, 0)
+                            p[isinvalid].normal_(0, 0.1)
+                            print(f"Fixed nan/inf values in grad of {name}")
+                            print(f"  grad = {p.grad}")
+
                 if args.amp:
                     scaler.step(optimizer)
                     scaler.update()
                 else:
                     optimizer.step()
 
-            with Timer(elapsed, "optim/lrstep", sync_cuda=True):
+                with Timer(elapsed, "lrstep", sync_cuda=True):
                 scheduler.step()
 
-            with Timer(elapsed, "optim/zerograd", sync_cuda=True):
+                with Timer(elapsed, "zerograd", sync_cuda=True):
                 model.zero_grad()
 
         if i % args.eval_interval == 0:
@@ -256,9 +265,8 @@ def train(args):
                 f"meansim={simscore:.3f}%"
             )
             logger.debug(simscores.to_string(float_format="%5.1f"))
-            _print_elapsed(elapsed)
-            _total_timer.update()
-            _print_elapsed(_total_elapsed)
+            total_timer.update()
+            logger.debug("-- Elapsed --\n" + elapsed.format(thresh=0.8))
 
             if args.use_wandb:
                 loginfo = {
@@ -297,25 +305,6 @@ def train(args):
                 "eval/best_savepath": best_savepath,
             }
         )
-
-
-def _print_elapsed(elapsed, thresh=0.8):
-    elapsed = sorted(elapsed.items(), key=lambda x: x[1], reverse=True)
-    total = sum([t for name, t in elapsed])
-    cum = 0
-    lines = []
-    for name, t in elapsed:
-        line = f"{name:<20} {t:>8.2f}"
-        lines.append(line)
-        cum += t
-        if cum >= total * thresh:
-            break
-    lines = sorted(lines)
-    s = "-- Elapsed --\n" + "\n".join(lines)
-    other_time = total - cum
-    if other_time >= 1.0:
-        s += f'\n{"others":<20} {other_time:>8.2f}'
-    logger.debug(s)
 
 
 def set_seed(seed):
