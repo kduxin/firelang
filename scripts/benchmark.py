@@ -210,6 +210,7 @@ _cache = defaultdict(dict)
 
 
 @torch.no_grad()
+@Timer(elapsed, "wordsim")
 def benchmark_word_similarity(
     model: FIREWord, benchmarks: Mapping[str, SimilarityBenchmark]
 ):
@@ -671,18 +672,26 @@ if __name__ == "__main__":
     device = "cuda"
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoints_for_similarity', nargs='+', default=[
+    parser.add_argument(
+        "--checkpoints_for_similarity",
+        nargs="+",
+        default=[
         "checkpoints/wacky_mlplanardiv_d2_l4_k1_polysemy",
         "checkpoints/wacky_mlplanardiv_d2_l4_k10",
         "checkpoints/wacky_mlplanardiv_d2_l8_k20",
-    ])
-    parser.add_argument('--checkpoints_for_polysemy', nargs='+', default=[
+        ],
+    )
+    parser.add_argument(
+        "--checkpoints_for_polysemy",
+        nargs="+",
+        default=[
         "checkpoints/wacky_mlplanardiv_d2_l4_k1_polysemy",
-    ])
+        ],
+    )
     args = parser.parse_args()
 
-
     for checkpoint in args.checkpoints_for_similarity:
+        elapsed.clear()
         print(f"=============== Checkpoint `{checkpoint}` ================")
         model = torch.load(checkpoint, map_location=device)
 
@@ -707,13 +716,21 @@ if __name__ == "__main__":
         print(scores)
         print()
 
-        print("elapsed:", elapsed)
+        print("elapsed:\n", elapsed.format())
         print("\n\n\n")
 
     for checkpoint in args.checkpoints_for_polysemy:
-        print(f"========= Word polysemy detection with checkpoint `{checkpoint}` =========")
+        elapsed.clear()
+        print(
+            f"========= Word polysemy detection with checkpoint `{checkpoint}` ========="
+        )
         w2nsense = load_numwordsense("data/wordnet-542.txt")
         model = torch.load(checkpoint, map_location=device)
         acc, corr = benchmark_wordsense_number(model, w2nsense, eps=0.40)
-        print(f"Accuracy = {acc*100:.3g}%, Pearson Correlation Coefficient = {corr:.3g}")
+        print(
+            f"Accuracy = {acc*100:.3g}%, Pearson Correlation Coefficient = {corr:.3g}"
+        )
         print()
+
+        print("elapsed:\n", elapsed.format())
+        print("\n\n\n")
