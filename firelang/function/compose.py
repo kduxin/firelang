@@ -5,11 +5,11 @@ __all__ = ["Sequential", "sequential"]
 
 
 class Sequential(Functional):
-    def __init__(self, funcs, stack_size=1):
+    def __init__(self, funcs, shape=(1,)):
         Functional.__init__(
             self,
             locals(),
-            prev=[func.restack(stack_size) for func in funcs],
+            prev=[func.restack(shape) for func in funcs],
             operator=sequential,
         )
 

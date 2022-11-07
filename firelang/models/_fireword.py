@@ -8,7 +8,7 @@ from torch.nn import Module, functional as F
 
 from firelang.measure import Measure
 from firelang.function import Functional
-from firelang.stack import StackingSlicing
+from firelang.stack import StackingSlicing, IndexLike
 from firelang.measure import DiracMixture, metrics
 from firelang.utils.timer import Timer, elapsed
 from firelang.utils.optim import Loss
@@ -17,6 +17,7 @@ from corpusit import Vocab
 
 __all__ = [
     "FIREWord",
+    "FIRETensor",
 ]
 
 
@@ -59,7 +60,7 @@ class FIREWord(Module):
     def detect_device(self) -> torch.device:
         return next(iter(self.parameters())).device
 
-    def forward(self, ranks: Tensor) -> Tuple[Functional, Measure]:
+    def forward(self, ranks: Tensor) -> FIRETensor:
         """
         Args:
             ranks (Tensor): (n, ) of word ranks
@@ -75,9 +76,9 @@ class FIREWord(Module):
         ):
             func = self.funcs[ranks]
             measure = self.measures[ranks]
-        return FIREWordSlice(func, measure)
+        return FIRETensor(func, measure)
 
-    def __getitem__(self, words: Union[str, List[str]]) -> Tuple[Functional, Measure]:
+    def __getitem__(self, words: Union[str, List[str]]) -> FIRETensor:
         """
         Args:
             words (str or List[str]): a word or a list of words
@@ -123,7 +124,7 @@ class FIREWord(Module):
         stack = int(np.prod(meshx.shape))
 
         func, _ = self[[word] * stack]
-        measure = DiracMixture(self.dim, 1, limits=None, stack_size=stack).to(
+        measure = DiracMixture(self.dim, 1, limits=None, shape=(stack,)).to(
             self.detect_device()
         )
         measure.requires_grad_(False)
@@ -149,14 +150,12 @@ class FIREWord(Module):
                 corresponding word pair is a positive or a negative sample.
         """
 
-        func1, measure1 = self.forward(pairs[..., 0])
-        func2, measure2 = self.forward(pairs[..., 1])
-
-        sim1 = measure2.integral(func1)
-        sim2 = measure1.integral(func2)
-        logits = sim1 + sim2
+        x1: FIRETensor = self.forward(pairs[..., 0])
+        x2: FIRETensor = self.forward(pairs[..., 1])
 
         loss = Loss()
+
+        logits = x1 * x2
         loss_sim = F.binary_cross_entropy_with_logits(
             logits, labels.float(), reduction="none"
         )
@@ -164,8 +163,8 @@ class FIREWord(Module):
 
         if hasattr(args, "sinkhorn_weight") and args.sinkhorn_weight > 0.0:
             s = metrics.sinkhorn(
-                measure1,
-                measure2,
+                x1.measures,
+                x2.measures,
                 reg=args.sinkhorn_reg,
                 max_iter=args.sinkhorn_max_iter,
                 p=args.sinkhorn_p,
@@ -178,42 +177,43 @@ class FIREWord(Module):
         return loss
 
 
-class FIREWordSlice:
+class FIRETensor:
     def __init__(self, funcs: Functional, measures: Measure):
+        assert funcs.shape == measures.shape
         self.funcs: Functional = funcs
         self.measures: Measure = measures
 
-    def __len__(self):
-        return 2
+    def __getitem__(self, index: IndexLike) -> FIRETensor:
+        return FIRETensor(self.funcs[index], self.measures[index])
 
-    def __getitem__(self, i):
-        return [self.funcs, self.measures][i]
-
-    def __mul__(self, other: FIREWordSlice):
-        funcs, measures = self
-        funcs_other, measures_other = other
-        if id(other) == id(self):
-            return measures.integral(funcs, sum=False) * 2
+    def view(self, *shape, inplace=False) -> FIRETensor:
+        if inplace:
+            self.funcs.view(*shape, inplace=True)
+            return self
         else:
-            return measures_other.integral(funcs, sum=False) + measures.integral(
-                funcs_other, sum=False
+            return FIRETensor(
+                funcs=self.funcs.view(*shape, inplace=False),
+                measures=self.measures.view(*shape, inplace=False),
             )
 
-    def __matmul__(self, other: FIREWordSlice):
-        funcs, measures = self
-        funcs_other, measures_other = other
+    def __mul__(self, other: FIRETensor):
         if id(other) == id(self):
-            mat = measures.integral(funcs, cross=True)
-            return mat + mat.T
+            return self.measures.integral(self.funcs) * 2
         else:
-            return (
-                measures_other.integral(funcs, cross=True)
-                + measures.integral(funcs_other, cross=True).T
+            return other.measures_other.integral(self.funcs) + self.measures.integral(other.funcs_other)
+
+    def __matmul__(self, other: FIRETensor):
+        if id(other) == id(self):
+            mat = self.measures.integral(self.funcs, cross=True)
+            return mat + torch.transpose(mat, -2, -1)
+        else:
+            return other.measures_other.integral(self.funcs, cross=True) + torch.transpose(
+                self.measures.integral(other.funcs_other, cross=True), -2, -1
             )
 
     def __repr__(self):
         return (
             f"<(funcs={self.funcs.__class__.__name__}, "
             f"measures={self.measures.__class__.__name__}), "
-            f"stack_size={len(self.measures)}>"
+            f"shape={self.funcs.shape}>"
         )

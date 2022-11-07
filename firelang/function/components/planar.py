@@ -1,7 +1,10 @@
-from functools import partial
+from __future__ import annotations
+from typing import Tuple
+import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import Parameter
+from firelang.utils.shape import check_shape_consistency
 from .common import identity, identity_deriv, sigmoid_deriv, tanh_deriv
 from ..base import Functional
 
@@ -11,15 +14,14 @@ __all__ = [
 
 
 class PseudoPlanarTransform(Functional):
-    def __init__(self, dim, activation="tanh", stack_size=1):
+    def __init__(self, dim, activation="tanh", shape: int | Tuple[int] = (1,)):
         Functional.__init__(self, locals())
+
         scale = 0.1 / dim**0.5
-        self.v = Parameter(torch.randn(stack_size, dim).normal_(0, scale))
-        self.b = Parameter(torch.randn(stack_size, 1).normal_(0, scale))
-        self.u = Parameter(torch.randn(stack_size, dim).normal_(0, scale))
-        # v: (stack_size, dim)
-        # b: (stack_size)
-        # u: (stack_size, dim)
+        size = np.prod(shape)
+        self.v = Parameter(torch.randn(size, dim).normal_(0, scale))
+        self.b = Parameter(torch.randn(size, 1).normal_(0, scale))
+        self.u = Parameter(torch.randn(size, dim).normal_(0, scale))
 
         if activation is None:
             self.act, self.actderiv = identity, identity_deriv
@@ -32,170 +34,92 @@ class PseudoPlanarTransform(Functional):
 
         self.dim = dim
         self.activation = activation
-        self.stack_size = stack_size
+        self.shape = shape
 
-    @property
-    def w(self):
-        return self.v
+    def __mul__(self, x: Tensor) -> Tensor:
+        return self.forward(x)
 
-    def forward(self, x: Tensor, cross=False) -> Tensor:
-        """
-        Parameters:
-            x: (stack2, batch, dim)
-            when cross=True, also possible to get (stack1, stack2, batch, dim)
+    def forward(self, x: Tensor) -> Tensor:
+        """Compute f(x)
+
+        Args:
+            x (Tensor): (...shape, dim)
+
         Returns:
-            cross=False (stack1==stack2):
-                x: (stack2, batch, dim)
-            cross=True:
-                x: (stack1, stack2, batch, dim)
+            Tensor: (...shape, dim)
         """
-        if not cross:
-            assert x.shape[0] == self.stack_size
-            a = (
-                torch.einsum("sbi,si->sb", x, self.v)  # (stack_size, batch)
-                + self.b  # (stack_size, 1)
-            )  # (stack_size, batch)
-            fx = (
-                x
-                + self.act(a)[:, :, None]  # (stack_size, batch, 1)
-                * self.u[:, None, :]  # (stack_size, 1, dim)
-            )  # (stack_size, batch, dim)
-        else:
-            if x.ndim == 3:
-                x = x[None]
-            else:
-                assert x.ndim == 4
-                assert x.shape[0] == self.stack_size
+        fshape = self.shape
+        (*xshape, dim) = x.shape
+        check_shape_consistency(fshape, xshape)
 
-            a = (
-                torch.einsum("tsbi,ti->tsb", x, self.v)  # (stack_size, stack2, batch)
-                + self.b[:, None, :]  # (stack_size, 1, 1)
-            )  # (stack_size, stack2, batch)
-            fx = (
-                x
-                + self.act(a)[:, :, :, None]  # (stack_size, stack2, batch, 1)
-                * self.u[:, None, None, :]  # (stack_size, 1, 1, dim)
-            )  # (stack_size, stack2, batch, dim)
+        v = self.v.view(*fshape, self.dim)
+        b = self.b.view(*fshape)
+        u = self.u.view(*fshape, self.dim)
+
+        a = torch.einsum("...i,...i->...", x, v) + b  # (...shape,)
+        fx = x + self.act(a)[..., None] * u  # (...shape, dim)
         return fx
 
-    def jacob(self, x, cross=False, return_fx=False):
-        """
-        Parameters:
-            x: (stack2, batch, dim)
-            when cross=True, also possible to get (stack1, stack2, batch, dim)
+    def jacob(self, x: Tensor, return_fx: bool = False) -> Tensor:
+        """Compute df(x) / dx
+
+        Args:
+            x (Tensor): (...shape, dim)
+            return_fx (bool, optional): whether returns f(x) or not. Defaults to False.
+
         Returns:
-            cross=False (stack1==stack2):
-                jacob: (stack2, batch, dim, dim)
-            cross=True:
-                jacob: (stack1, stack2, batch, dim, dim)
+            Tensor: (...shape, dim, dim)
         """
-        dim = x.shape[-1]
-        I = torch.eye(dim, device=x.device, dtype=x.dtype)
-        if not cross:
-            assert x.shape[0] == self.stack_size
-            I = I[None, None, :, :]
 
-            a = (
-                torch.einsum("sbi,si->sb", x, self.v)  # (stack_size, batch)
-                + self.b  # (stack_size, 1)
-            )  # (stack_size, batch)
-            ad = self.actderiv(a)  # (stack_size, batch)
-            jacob = (
-                I
-                + ad[:, :, None, None]  # (stack_size, batch, 1, 1)
-                * self.u[:, None, :, None]  # (stack_size, 1, dim, 1)
-                * self.v[:, None, None, :]  # (stack_size, 1, 1, dim)
-            )  # (stack_size, batch, dim, dim)
-            if return_fx:
-                fx = (
-                    x
-                    + self.act(a)[:, :, None]  # (stack_size, batch, 1)
-                    * self.u[:, None, :]  # (stack_size, 1, dim)
-                )  # (stack_size, batch, dim)
+        fshape = self.shape
+        (*xshape, dim) = x.shape
+        check_shape_consistency(fshape, xshape)
 
-        else:
-            if x.ndim == 3:
-                x = x[None]
-            else:
-                assert x.ndim == 4
-                assert x.shape[0] == self.stack_size
-            # x: (stack_size, stack, batch, dim)
-            I = I[None, None, None, :, :]
+        v = self.v.view(*fshape, self.dim)
+        b = self.b.view(*fshape)
+        u = self.u.view(*fshape, self.dim)
 
-            a = (
-                torch.einsum("tsbi,ti->tsb", x, self.v)  # (stack_size, stack2, batch)
-                + self.b[:, None, :]  # (stack_size, 1, 1)
-            )  # (stack_size, stack2, batch)
-            ad = self.actderiv(a)  # (stack_size, stack2, batch)
-            jacob = (
-                I
-                + ad[:, :, :, None, None]  # (stack_size, stack2, batch, 1, 1)
-                * self.u[:, None, None, :, None]  # (stack_size, 1, 1, dim, 1)
-                * self.v[:, None, None, None, :]  # (stack_size, 1, 1, 1, dim)
-            )  # (stack_size, stack2, batch, dim, dim)
-            if return_fx:
-                fx = (
-                    x
-                    + self.act(a)[:, :, :, None]  # (stack_size, stack2, batch, 1)
-                    * self.u[:, None, None, :]  # (stack_size, 1, 1, dim)
-                )  # (stack_size, stack2, batch, dim)
+        I = torch.eye(dim, device=x.device, dtype=x.dtype).reshape(
+            *[1 for _ in xshape], dim, dim
+        )
+
+        a = torch.einsum("...i,...i->...", x, v) + b
+        ad = self.actderiv(a)
+        jacob = (
+            I + ad[..., None, None] * u[..., :, None] * v[..., None, :]
+        )  # (fshape, dim, dim)
 
         if return_fx:
+            fx = x + self.act(a)[..., None] * u  # (...shape, dim)
             return jacob, fx
         else:
             return jacob
 
-    def jacdet(self, x: Tensor, cross=False, return_fx=False):
-        """
-        Parameters:
-            x: (stack2, batch, dim)
-            when cross=True, also possible to get (stack1, stack2, batch, dim)
+    def jacdet(self, x: Tensor, return_fx: bool = False) -> Tensor:
+        """Compute det(df(x) / dx)
+
+        Args:
+            x (Tensor): (...shape, dim)
+            return_fx (bool, optional): whether returns f(x) or not. Defaults to False.
+
         Returns:
-            cross=False (stack1==stack2):
-                jacob: (stack2, batch)
-            cross=True:
-                jacob: (stack1, stack2, batch)
+            Tensor: (...shape)
         """
-        u_dot_v = torch.einsum("si,si->s", self.u, self.v)  # (stack_size, )
-        if not cross:
-            assert x.shape[0] == self.stack_size
-            # x: (stack_size, batch, dim)
+        fshape = self.shape
+        (*xshape, dim) = x.shape
+        check_shape_consistency(fshape, xshape)
 
-            a = torch.einsum("sbi,si->sb", x, self.v) + self.b
-            # a: (stack_size, batch)
-            ad = self.actderiv(a)  # (stack_size, batch)
-            jacdet = 1 + ad * u_dot_v[:, None]  # (stack_size, )  # (stack_size, batch)
-            if return_fx:
-                fx = (
-                    x
-                    + self.act(a)[:, :, None]  # (stack_size, batch, 1)
-                    * self.u[:, None, :]  # (stack_size, 1, dim)
-                )  # (stack_size, batch, dim)
-        else:
-            if x.ndim == 3:
-                x = x[None]
-            elif x.ndim == 4:
-                assert x.shape[0] == self.stack_size
-            else:
-                raise ValueError(x.ndim)
-            # x: (stack_size, stack2, batch, dim)
+        v = self.v.view(*fshape, self.dim)
+        b = self.b.view(*fshape)
+        u = self.u.view(*fshape, self.dim)
 
-            a = (
-                torch.einsum("stbi,si->stb", x, self.v)  # (stack_size, stack2, batch)
-                + self.b[:, None, :]  # (stack_size, 1, 1)
-            )  # (stack_size, stack2, batch)
-            ad = self.actderiv(a)  # (stack_size, stack2, batch)
-            jacdet = (
-                1 + ad * u_dot_v[:, None, None]  # (stack_size, 1, 1)
-            )  # (stack_size, stack2, batch)
-            if return_fx:
-                fx = (
-                    x
-                    + self.act(a)[:, :, :, None]  # (stack_size, stack2, batch, 1)
-                    * self.u[:, None, None, :]  # (stack_size, 1, 1, dim)
-                )  # (stack_size, stack2, batch, dim)
+        u_dot_v = torch.einsum("...i,...i->...", u, v)  # (...fshape,)
+        a = torch.einsum("...i,...i->...", x, v) + b  # (...fshape,)
+        ad = self.actderiv(a)  # (...fshape,)
+        jacdet = 1 + ad * u_dot_v
 
         if return_fx:
+            fx = x + self.act(a)[..., None] * u  # (...shape, dim)
             return jacdet, fx
         else:
             return jacdet

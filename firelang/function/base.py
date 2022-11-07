@@ -1,9 +1,10 @@
 from __future__ import division, annotations
-from typing import Mapping, Any, Iterable, Callable, Union
+from typing import Tuple, Mapping, Any, Iterable, Callable, Union
 import operator as op
+import numpy as np
 from torch.nn import Module, ModuleList
 import firelang
-from firelang.stack import StackingSlicing
+from firelang.stack import StackingSlicing, _parse_shape
 
 __all__ = ["Functional"]
 
@@ -26,18 +27,18 @@ class Functional(StackingSlicing):
 
     def __add__(self, func_or_scalar):
         if isinstance(func_or_scalar, StackingSlicing):
-            assert self.stack_size == func_or_scalar.stack_size
+            assert self.shape == func_or_scalar.shape
         return Functional(
-            locals_={"stack_size": self.stack_size},
+            locals_={"shape": self.shape},
             prev=[self, func_or_scalar],
             operator=op.add,
         )
 
     def __sub__(self, func_or_scalar):
         if isinstance(func_or_scalar, StackingSlicing):
-            assert self.stack_size == func_or_scalar.stack_size
+            assert self.shape == func_or_scalar.shape
         return Functional(
-            locals_={"stack_size": self.stack_size},
+            locals_={"shape": self.shape},
             prev=[self, func_or_scalar],
             operator=op.sub,
         )
@@ -50,16 +51,16 @@ class Functional(StackingSlicing):
             - if is `Measure`, compute the paired integral.
         """
         if isinstance(other, StackingSlicing) or isinstance(other, firelang.Measure):
-            assert self.stack_size == other.stack_size
+            assert self.shape == other.shape
 
         if isinstance(other, float) or isinstance(other, Functional):
             return Functional(
-                locals_={"stack_size": self.stack_size},
+                locals_={"shape": self.shape},
                 prev=[self, other],
                 operator=op.mul,
             )
         elif isinstance(other, firelang.Measure):
-            return other.integral(self, sum=False)
+            return other.integral(self)
         else:
             raise TypeError(
                 f"`other` must be a float or Functional or Measure object, not {type(other)}."
@@ -67,43 +68,35 @@ class Functional(StackingSlicing):
 
     def __truediv__(self, func_or_scalar):
         if isinstance(func_or_scalar, StackingSlicing):
-            assert self.stack_size == func_or_scalar.stack_size
+            assert self.shape == func_or_scalar.shape
         return Functional(
-            locals_={"stack_size": self.stack_size},
+            locals_={"shape": self.shape},
             prev=[self, func_or_scalar],
             operator=op.truediv,
         )
 
     def __pow__(self, pow: float):
         return Functional(
-            locals_={"stack_size": self.stack_size},
+            locals_={"shape": self.shape},
             prev=[self, pow],
             operator=op.pow,
         )
 
     def __neg__(self):
-        return Functional(
-            locals_={"stack_size": self.stack_size}, prev=[self], operator=op.neg
-        )
+        return Functional(locals_={"shape": self.shape}, prev=[self], operator=op.neg)
 
     def neg(self):
-        return Functional(
-            locals_={"stack_size": self.stack_size}, prev=[self], operator=op.neg
-        )
+        return Functional(locals_={"shape": self.shape}, prev=[self], operator=op.neg)
 
     def __abs__(self):
-        return Functional(
-            locals_={"stack_size": self.stack_size}, prev=[self], operator=op.abs
-        )
+        return Functional(locals_={"shape": self.shape}, prev=[self], operator=op.abs)
 
     def abs(self):
-        return Functional(
-            locals_={"stack_size": self.stack_size}, prev=[self], operator=op.abs
-        )
+        return Functional(locals_={"shape": self.shape}, prev=[self], operator=op.abs)
 
     def apply_op(self, mapping: Callable, *other_nodes):
         return Functional(
-            locals_={"stack_size": self.stack_size},
+            locals_={"shape": self.shape},
             prev=[self, *other_nodes],
             operator=mapping,
         )
@@ -157,9 +150,31 @@ class Functional(StackingSlicing):
             newop = sliced[0].apply_op(self.operator, *sliced[1:])
         return newop
 
+    def view(self, *shape, inplace: bool = False):
+        shape = _parse_shape(shape, num_elements=np.prod(self.shape))
+
+        if inplace:
+            if self.is_leaf():
+                StackingSlicing.view(self, shape, inplace=True)
+            else:
+                for node in self.prev:
+                    if isinstance(node, Functional):
+                        Functional.view(node, shape, inplace=True)
+            return self
+        else:
+            if self.is_leaf():
+                newop = StackingSlicing.view(self, shape)
+            else:
+                prev = [
+                    Functional.view(node, shape) if isinstance(node, Functional) else node
+                    for node in self.prev
+                ]
+                newop = prev[0].apply_op(self.operator, *prev[1:])
+            return newop
+
     def __repr__(self):
         if self.is_leaf():
-            return Module.__repr__(self) + f", stack_size={self.stack_size}"
+            return Module.__repr__(self) + f", shape={self.shape}"
         else:
             segs = [f"{self.__class__.__name__}("]
             for i, node in enumerate(self.prev):
@@ -176,12 +191,12 @@ class Functional(StackingSlicing):
             segs.append(f"), operator={op_name}")
             return "\n".join(segs)
 
-    def restack(self, stack_size):
+    def restack(self, shape: Tuple[int] = None):
         if self.is_leaf():
-            newop = StackingSlicing.restack(self, stack_size)
+            newop = StackingSlicing.restack(self, shape)
         else:
             stacked = [
-                node.restack(stack_size) if hasattr(node, "restack") else node
+                node.restack(shape) if hasattr(node, "restack") else node
                 for node in self.prev
             ]
             newop = stacked[0].apply_op(self.operator, *stacked[1:])
@@ -190,4 +205,5 @@ class Functional(StackingSlicing):
     stack = restack
 
     def __matmul__(self, measure: firelang.Measure):
+        assert isinstance(measure, firelang.Measure)
         return measure.integral(self, cross=True)

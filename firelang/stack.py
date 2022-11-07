@@ -1,7 +1,10 @@
-from typing import Mapping, Set, Iterable, Any
+from __future__ import annotations
+from typing import List, Tuple, Mapping, Set, Iterable, Any, Union
 from copy import deepcopy
 from collections import OrderedDict, defaultdict
 import inspect
+import numpy as np
+import torch
 from torch import Tensor
 from torch.nn import Module, ModuleList, ModuleDict
 
@@ -22,10 +25,15 @@ def current_cache_sizes():
     return {key: len(dct) for key, dct in _cache.items()}
 
 
+IndexLike = Union[
+    int, slice, List, Tensor, None, Tuple[Union[int, slice, List, Tensor, None], ...]
+]
+
+
 class StackingSlicing(Module):
     init_locals: Mapping[str, Any]
     unsliceable_params: Set[str]
-    skip_keys = ["stack_size"]
+    skip_keys = ["shape"]
 
     def __init__(
         self,
@@ -35,7 +43,7 @@ class StackingSlicing(Module):
         Module.__init__(self)
         self.init_locals = locals_
         self._sanity_check()
-        self.stack_size = locals_["stack_size"]
+        self.shape = locals_["shape"]
         self.unsliceable_params = set(unsliceable_params)
 
     def register_extra_init_kwargs(self, **kwargs):
@@ -51,18 +59,41 @@ class StackingSlicing(Module):
             type(self) != StackingSlicing
         ), "StackingSlicing must be initialized from a subclass"
 
-        assert "stack_size" in self.init_locals, (
-            "A `StackingSlicing` subclass must accept `stack_size` as an "
+        assert "shape" in self.init_locals, (
+            "A `StackingSlicing` subclass must accept `shape` as an "
             "initialization argument."
         )
 
-    def __getitem__(self, ids: Tensor):
-        """
-        ids: 1d Tensor of torch.Long
-        """
-        assert ids.ndim == 1
-        new_stack_size = len(ids)
-        to: StackingSlicing = self.restack(new_stack_size)
+    def view(self, *shape, inplace: bool = False):
+        shape = _parse_shape(shape, np.prod(self.shape))
+
+        if inplace:
+            self.shape = shape
+            return self
+
+        else:
+            new = deepcopy(self)
+            new.shape = shape
+
+            for module in new.children():
+                if isinstance(module, StackingSlicing):
+                    StackingSlicing.view(module, *shape, inplace=True)
+                elif isinstance(module, ModuleList):
+                    for m in module:
+                        if isinstance(m, StackingSlicing):
+                            StackingSlicing.view(m, *shape, inplace=True)
+                elif isinstance(module, ModuleDict):
+                    for _, m in module.items():
+                        if isinstance(m, StackingSlicing):
+                            StackingSlicing.view(m, *shape, inplace=True)
+            return new
+
+    def __getitem__(self, index: IndexLike):
+        idtensor: Tensor = _parse_index(index, self.shape)
+        ids = idtensor.reshape(-1)
+        shape = tuple(idtensor.shape)
+
+        to: StackingSlicing = self.restack(shape)
 
         # A parameter not listed in `unsliceable_params` should be
         # sliced and copied. Otherwise, the whole parameter is copied.
@@ -81,27 +112,29 @@ class StackingSlicing(Module):
             submod_to.requires_grad_(False)
 
             if isinstance(module, StackingSlicing):
-                submod_from: Module = module[ids]
+                submod_from: Module = module.__getitem__(index)
             elif isinstance(module, ModuleList):
                 submod_from = ModuleList(
                     [
-                        entry[ids] if isinstance(entry, StackingSlicing) else entry
+                        entry[index] if isinstance(entry, StackingSlicing) else entry
                         for entry in module
                     ]
                 )
             elif isinstance(module, ModuleDict):
                 submod_from = ModuleDict(
                     {
-                        key: entry[ids] if isinstance(entry, StackingSlicing) else entry
+                        key: entry[index]
+                        if isinstance(entry, StackingSlicing)
+                        else entry
                         for key, entry in module.items()
                     }
                 )
             else:
                 submod_from: Module = module
-            submod_from.stack_size = new_stack_size
+            submod_from.shape = shape
             setattr(to, name, submod_from)
 
-        to.stack_size = new_stack_size
+        to.shape = shape
         return to
 
     def detect_device(self):
@@ -112,12 +145,17 @@ class StackingSlicing(Module):
         return hash(tuple(name_shapes))
 
     def restack(
-        self, stack_size: int, use_cached: bool = True, max_cached_copies: int = 100
+        self,
+        shape: int | Tuple[int],
+        use_cached: bool = True,
+        max_cached_copies: int = 100,
     ):
+        if not isinstance(shape, Tuple):
+            shape = (shape,)
 
         tag = f"stacked/{self.__class__.__name__}-{self._parameter_shape_hash()}"
-        if use_cached and stack_size in _cache[tag]:
-            new = deepcopy(_cache[tag][stack_size])
+        if use_cached and shape in _cache[tag]:
+            new = deepcopy(_cache[tag][shape])
         else:
             positional, keywords = self._recover_args_from_locals(
                 locals_=self.init_locals,
@@ -125,15 +163,15 @@ class StackingSlicing(Module):
             new = self.__class__(
                 *positional,
                 **keywords,
-                stack_size=stack_size,
+                shape=shape,
             )
             new = new.to(self.detect_device())
-            new.stack_size = stack_size
 
-            _cache[tag][stack_size] = new
+            _cache[tag][shape] = new
             while len(_cache[tag]) > max_cached_copies:
                 _cache[tag].popitem(last=False)  # pop the earliest
 
+        new.shape = shape
         return new.to(self.detect_device())
 
     stack = restack
@@ -162,5 +200,97 @@ class StackingSlicing(Module):
                 keywords = {**keywords, **value}
         return positional, keywords
 
-    def __len__(self):
-        return self.stack_size
+
+def _complete_ellipsis(index: Tuple[Any | Ellipsis], ndim: int):
+    num_ellip = index.count(Ellipsis)
+    assert num_ellip <= 1, f"Invalid index {index}"
+    if num_ellip == 0:
+        return index
+
+    i = index.index(Ellipsis)
+    completed = (
+        list(index[:i]) + [slice(None)] * (ndim - len(index) + 1) + list(index[i + 1 :])
+    )
+    return tuple(completed)
+
+
+def _parse_index(index: IndexLike, shape: Tuple[int]) -> Tensor:
+    if not isinstance(index, tuple):
+        index = (index,)
+    index = _complete_ellipsis(index, ndim=len(shape))
+
+    nindex = len(index)
+
+    nindex_notnan = len([idx for idx in index if idx is not None])
+    stride = int(np.prod(shape[nindex_notnan:]))
+
+    ids = torch.tensor([0], dtype=torch.long)
+    slice_shape = []
+    dim = len(index) - 1
+    shape_dim = nindex_notnan - 1
+    for dim in range(nindex - 1, -1, -1):
+        if index[dim] is None:
+            slice_shape.append(1)
+            continue
+
+        index_at_dim = index[dim]
+        size_at_dim = shape[shape_dim]
+        if isinstance(index_at_dim, int):
+            ids = ids + index_at_dim * stride
+        elif isinstance(index_at_dim, slice):
+            offsets = torch.arange(size_at_dim)[index_at_dim] * stride
+            ids = (offsets[:, None] + ids[None, :]).reshape(-1)
+            slice_shape.append(len(offsets))
+        elif isinstance(index_at_dim, list):
+            offsets = torch.tensor(index_at_dim) * stride
+            ids = (offsets[:, None] + ids[None, :]).reshape(-1)
+            slice_shape.append(len(offsets))
+        elif isinstance(index_at_dim, Tensor):
+            assert index_at_dim.ndim == 1, (
+                f"Index at dimension {dim} should be 1-dimensional, "
+                f"not {index_at_dim.ndim}-d."
+            )
+            ids = ids.to(index_at_dim.device)
+            offsets = index_at_dim * stride
+            ids = (offsets[:, None] + ids[None, :]).reshape(-1)
+            slice_shape.append(len(offsets))
+        else:
+            raise TypeError(
+                f"Index at dimension {dim} should be "
+                f"a `int`, a `slice`, or a `Tensor`, not {type(index_at_dim)}"
+            )
+
+        stride *= size_at_dim
+        shape_dim -= 1
+
+    slice_shape = list(reversed(slice_shape))
+    return ids.reshape(slice_shape)
+
+
+def _replace_minus_one(shape: Tuple[int], num_elements: int):
+    num_minus_one = shape.count(-1)
+    assert num_minus_one <= 1, f"Invalid shape {shape}"
+    if num_minus_one == 0:
+        return shape
+
+    otherdim = int(np.prod([size for size in shape if size >= 1]))
+    inferred = num_elements // otherdim
+    assert (
+        inferred * otherdim == num_elements
+    ), f"Invalid new shape {shape} for {num_elements} elements"
+    i = shape.index(-1)
+    replaced = list(shape[:i]) + [inferred] + list(shape[i + 1 :])
+    return tuple(replaced)
+
+
+def _parse_shape(shape, num_elements):
+    if len(shape) == 1:
+        assert isinstance(shape, Iterable)
+        shape = tuple(shape[0])
+    shape = _replace_minus_one(shape, num_elements=num_elements)
+    given_num_elements = np.prod(shape)
+    assert (
+        given_num_elements == num_elements
+    ), f"Inconsistent shape: should have {num_elements} elements, not {given_num_elements}."
+    return shape
+

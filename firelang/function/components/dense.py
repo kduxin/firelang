@@ -1,10 +1,10 @@
 from typing_extensions import Literal
-from functools import partial
 import numpy as np
 import torch
 from torch import Tensor
 from torch import nn
 from torch.nn import Parameter
+from firelang.utils.shape import check_shape_consistency
 from .common import identity, identity_deriv, sigmoid_deriv, tanh_deriv
 from ..base import Functional
 
@@ -20,15 +20,14 @@ class Perceptron(Functional):
         output_dim,
         activation="sigmoid",
         norm: Literal[None, "batch", "layer"] = None,
-        stack_size=1,
+        shape=(1,),
     ):
         Functional.__init__(self, locals())
 
+        size = np.prod(shape)
         scale = 0.1 / (input_dim + output_dim) ** 0.5
-        self.A = Parameter(
-            torch.empty(stack_size, output_dim, input_dim).normal_(0, scale)
-        )
-        self.b = Parameter(torch.zeros(stack_size, output_dim))
+        self.A = Parameter(torch.empty(size, output_dim, input_dim).normal_(0, scale))
+        self.b = Parameter(torch.zeros(size, output_dim))
 
         if activation is None:
             self.act, self.actderiv = identity, identity_deriv
@@ -50,32 +49,29 @@ class Perceptron(Functional):
 
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.stack_size = stack_size
+        self.shape = shape
         self.activation = activation
         self.norm = norm
 
-    def forward(self, x, cross=False) -> Tensor:
+    def forward(self, x) -> Tensor:
         """
         Parameters:
-            x: (stack2, batch, input_dim)
-            when cross=True, also possible to get (stack1, stack2, batch, dim)
+            x: (...shape, input_dim)
         Returns:
-            if cross == True:
-                (stack1, stack2, batch, output_dim)
-            elif cross == False (and stack == stack2):
-                (stack1, batch, output_dim)
+            (...shape, output_dim)
         """
-        if cross == True:
-            if x.ndim == 3:
-                x = torch.einsum("tbj,sij->stbi", x, self.A) + self.b[:, None, None, :]
-            elif x.ndim == 4:
-                x = torch.einsum("stbj,sij->stbi", x, self.A) + self.b[:, None, None, :]
-            else:
-                raise ValueError(x.ndim)
-        else:
-            x = torch.einsum("sbj,sij->sbi", x, self.A) + self.b[:, None, :]
-        xshape = x.shape
+        fshape = self.shape
+        (*xshape, input_dim) = x.shape
+        check_shape_consistency(fshape, xshape)
 
+        output_dim = self.output_dim
+        A = self.A.view(*fshape, output_dim, input_dim)
+        b = self.b.view(*fshape, output_dim)
+
+        x = torch.einsum("...i,...ji->...j", x, A) + b
+
+        # normalization
+        xshape = x.shape
         x = self.normalizer(x.reshape(np.prod(xshape[:-1]), xshape[-1])).reshape(
             *xshape
         )
@@ -85,18 +81,23 @@ class Perceptron(Functional):
     def jacob(self, x) -> Tensor:
         """
         Parameters:
-            x: (stack, batch, input_dim)
+            x: (...shape, input_dim)
         Returns:
-            jac: (stack, batch, output_dim, input_dim)
+            jacob: (...shape, output_dim, input_dim)
         """
         assert self.norm is None
-        a = torch.einsum("sbj,sij->sbi", x, self.A) + self.b.unsqueeze(
-            1
-        )  # (stack, batch, output_dim)
-        ad = self.actderiv(a)  # (stack, batch, output_dim)
-        jacob = ad[..., None] * self.A.unsqueeze(
-            1
-        )  # (stack, batch, output_dim, input_dim)
+
+        fshape = self.shape
+        (*xshape, input_dim) = x.shape
+        check_shape_consistency(fshape, xshape)
+
+        output_dim = self.output_dim
+        A = self.A.view(*fshape, output_dim, input_dim)
+        b = self.b.view(*fshape, output_dim)
+
+        a = torch.einsum("...i,...ji->...j", x, A) + b
+        ad = self.actderiv(a)  # (...shape, output_dim)
+        jacob = ad[..., None] * self.A  # (...shape, output_dim, input_dim)
         return jacob
 
     def jacdet(self, x) -> Tensor:
