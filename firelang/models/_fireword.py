@@ -237,8 +237,8 @@ class FIRETensor:
         if id(other) == id(self):
             return self.measures.integral(self.funcs) * 2
         else:
-            return other.measures_other.integral(self.funcs) + self.measures.integral(
-                other.funcs_other
+            return other.measures.integral(self.funcs) + self.measures.integral(
+                other.funcs
             )
 
     def __matmul__(self, other: FIRETensor):
@@ -246,10 +246,8 @@ class FIRETensor:
             mat = self.measures.integral(self.funcs, cross=True)
             return mat + torch.transpose(mat, -2, -1)
         else:
-            return other.measures_other.integral(
-                self.funcs, cross=True
-            ) + torch.transpose(
-                self.measures.integral(other.funcs_other, cross=True), -2, -1
+            return other.measures.integral(self.funcs, cross=True) + torch.transpose(
+                self.measures.integral(other.funcs, cross=True), -2, -1
             )
 
     def __repr__(self):
