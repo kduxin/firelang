@@ -139,6 +139,40 @@ class FIREWord(Module):
         outputs = outputs.view(*meshx.shape)
         return outputs
 
+    @torch.no_grad()
+    def most_similar(
+        self, word: str, k: int = 10, p: float = 0.3,
+    ) -> List[Tuple[str, float]]:
+        """Return the most similar `k` words to `word`, as well as the (frequency-adjusted) similarity scores.
+
+        Args:
+            word (str): the word of which the most similar words are computed.
+            k (int): the number of similar words to return.
+            p (float, optional): a exponent controlling the strength of frequency-based adjustment. Defaults to 0.3.
+
+        Returns:
+            List[Tuple[str, float]]: the similar words and their frequency-adjusted similar scores.
+        """
+        w = self[word]
+        sims = self.funcs * w.measures + w.funcs * self.measures  # (vocab_size,)
+
+        # adjust with word frequency
+        vocab = self.vocab
+        if p is not None:
+            counts = torch.tensor(
+                [vocab.i2count[self.rank2i[rank]] for rank in range(len(vocab))],
+                dtype=torch.float32,
+                device=sims.device,
+            )
+            sims = sims * (counts**p)
+
+        topk = sims.topk(k)
+        ranks = topk.indices.data.cpu().numpy()
+        values = topk.values.data.cpu().numpy()
+
+        words = [vocab.i2s[self.rank2i[rank]] for rank in ranks]
+        return list(zip(words, values))
+
     def loss_skipgram(
         self, pairs: Tensor, labels: Tensor, args: Namespace = Namespace()
     ) -> Loss:
@@ -200,14 +234,18 @@ class FIRETensor:
         if id(other) == id(self):
             return self.measures.integral(self.funcs) * 2
         else:
-            return other.measures_other.integral(self.funcs) + self.measures.integral(other.funcs_other)
+            return other.measures_other.integral(self.funcs) + self.measures.integral(
+                other.funcs_other
+            )
 
     def __matmul__(self, other: FIRETensor):
         if id(other) == id(self):
             mat = self.measures.integral(self.funcs, cross=True)
             return mat + torch.transpose(mat, -2, -1)
         else:
-            return other.measures_other.integral(self.funcs, cross=True) + torch.transpose(
+            return other.measures_other.integral(
+                self.funcs, cross=True
+            ) + torch.transpose(
                 self.measures.integral(other.funcs_other, cross=True), -2, -1
             )
 

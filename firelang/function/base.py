@@ -50,9 +50,6 @@ class Functional(StackingSlicing):
             - if is `float` or `Functional`: generate a new Functional.
             - if is `Measure`, compute the paired integral.
         """
-        if isinstance(other, StackingSlicing) or isinstance(other, firelang.Measure):
-            assert self.shape == other.shape
-
         if isinstance(other, float) or isinstance(other, Functional):
             return Functional(
                 locals_={"shape": self.shape},
