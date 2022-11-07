@@ -26,7 +26,7 @@ class DiracMixture(Measure):
         shape: Tuple[int] = (1,),
     ):
         Measure.__init__(self, locals())
-        size = np.prod(shape)
+        size = int(np.prod(shape))
         if limits is None:
             self._x = Parameter(torch.randn(size, k, dim, dtype=torch.float32))
         else:

@@ -24,7 +24,7 @@ class Perceptron(Functional):
     ):
         Functional.__init__(self, locals())
 
-        size = np.prod(shape)
+        size = int(np.prod(shape))
         scale = 0.1 / (input_dim + output_dim) ** 0.5
         self.A = Parameter(torch.empty(size, output_dim, input_dim).normal_(0, scale))
         self.b = Parameter(torch.zeros(size, output_dim))
@@ -72,7 +72,7 @@ class Perceptron(Functional):
 
         # normalization
         xshape = x.shape
-        x = self.normalizer(x.reshape(np.prod(xshape[:-1]), xshape[-1])).reshape(
+        x = self.normalizer(x.reshape(int(np.prod(xshape[:-1])), xshape[-1])).reshape(
             *xshape
         )
         x = self.act(x)

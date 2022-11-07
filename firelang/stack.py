@@ -65,7 +65,7 @@ class StackingSlicing(Module):
         )
 
     def view(self, *shape, inplace: bool = False):
-        shape = _parse_shape(shape, np.prod(self.shape))
+        shape = _parse_shape(shape, int(np.prod(self.shape)))
 
         if inplace:
             self.shape = shape
@@ -288,7 +288,7 @@ def _parse_shape(shape, num_elements):
         assert isinstance(shape, Iterable)
         shape = tuple(shape[0])
     shape = _replace_minus_one(shape, num_elements=num_elements)
-    given_num_elements = np.prod(shape)
+    given_num_elements = int(np.prod(shape))
     assert (
         given_num_elements == num_elements
     ), f"Inconsistent shape: should have {num_elements} elements, not {given_num_elements}."
