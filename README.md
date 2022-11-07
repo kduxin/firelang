@@ -218,18 +218,18 @@ In FIRE, the `slicing` and similarity computation are done in a similar way to v
 
 - Slicing:
   ```python
-  funcs1, measures1 = model[["apple", "pear", ...]]       # (n1, D)
-  funcs2, measures2 = model[["iphone", "fruit", ...]]     # (n1, D)
+  x1 = model[["apple", "pear", ...]]       # FIRETensor: (n1, D)
+  x2 = model[["iphone", "fruit", ...]]     # FIRETensor: (n1, D)
   ```
 - Computation of paired similarity (where n1 == n2):
   ```python
-  sim = measures2.integral(funcs1)    # (n1,)
-      + measures1.integral(funcs2)    # (n2,)
+  sim = x2.measures.integral(x1.funcs)    # (n1,)
+      + x1.measures.integral(x2.funcs)    # (n2,)
   ```
 - Computation of cross similarity:
   ```python
-  sim = measures2.integral(funcs1, cross=True)    # (n1, n2)
-      + measures1.integral(funcs2, cross=True).T  # (n2, n1) -> transpose -> (n1, n2)
+  sim = x2.measures.integral(x1.funcs, cross=True)    # (n1, n2)
+      + x1.measures.integral(x2.funcs, cross=True).T  # (n2, n1) -> transpose -> (n1, n2)
   ```
 
 In addition to the way above where `integral` must be explicitly invoked,
@@ -237,25 +237,16 @@ a more friendly way is also provided, as below:
 ```python
 # paired similarity
 # sim: (n1,)
-sim = (funcs1 * measures2)       # (n1, K)    where K is the number of locations in the measure
-      .sum(-1)
-    + (measures1 * funcs2)       # (n2, K)
-      .sum(-1)
+sim = x1.funcs * x2.measures       # (n1,)
+    + x1.measures * x2.funcs       # (n2,)
 
 # cross similarity
-sim = funcs1 @ measures2 + measures1 @ funcs2     # (n1, n2)
+sim = x1.funcs @ x2.measures + x1.measures @ x2.funcs     # (n1, n2)
 ```
 
 Furthermore, the two steps above can be done in one line:
 ```python
 sim = model[["apple", "pear", "melon"]] @ model[["iphone", "fruit"]]     # (3, 2)
-
-# which is equivalent to below:
-# slice1 = model[["apple", "pear", "melon"]]
-# slice2 = model[["iphone", "fruit"]]
-# funcs1, measures1 = slice1
-# funcs2, measures2 = slice2
-# sim = measures2.integral(funcs1, cross=True) + measures1.integral(funcs2, cross=True).T
 ```
 
 
@@ -270,16 +261,16 @@ $$ \text{sim}(w_i,w_j) \leftarrow \text{sim}(w_i,w_j) - \int f_i ~\mathrm{d}\mu_
 is done by:
 
 ```python
-funcs1, measures1 = [["apple", "pear"]]
-funcs2, measures2 = [["fruit", "iphone"]]
-sim_reg = measures2.integral(funcs1) + measures1.integral(funcs2) \
-        - measures1.integral(funcs1) - measures2.integral(funcs2)
+x1 = model[["apple", "pear"]]
+x2 = model[["fruit", "iphone"]]
+sim_reg = x2.measures.integral(x1.funcs) + x1.measures.integral(x2.funcs) \
+        - x1.measures.integral(x1.funcs) - x2.measures.integral(x1.funcs)
 ```
 or equivalently:
 ```python
-sim_reg = ((funcs2 - funcs1) * measures1 + (funcs1 - funcs2) * measures2).sum(-1)
+sim_reg = (x2.funcs - x1.funcs) * x1.measures + (x1.funcs - x2.funcs) * x2.measures
 ```
-where `funcs2 - funcs1` produces a new functional.
+where `x2.funcs - x1.funcs` produces a new functional.
 
 
 
