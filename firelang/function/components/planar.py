@@ -18,7 +18,7 @@ class PseudoPlanarTransform(Functional):
         Functional.__init__(self, locals())
 
         scale = 0.1 / dim**0.5
-        size = np.prod(shape)
+        size = int(np.prod(shape))
         self.v = Parameter(torch.randn(size, dim).normal_(0, scale))
         self.b = Parameter(torch.randn(size, 1).normal_(0, scale))
         self.u = Parameter(torch.randn(size, dim).normal_(0, scale))

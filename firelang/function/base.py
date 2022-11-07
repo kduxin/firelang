@@ -151,7 +151,7 @@ class Functional(StackingSlicing):
         return newop
 
     def view(self, *shape, inplace: bool = False):
-        shape = _parse_shape(shape, num_elements=np.prod(self.shape))
+        shape = _parse_shape(shape, num_elements=int(np.prod(self.shape)))
 
         if inplace:
             if self.is_leaf():
