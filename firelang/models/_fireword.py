@@ -141,7 +141,10 @@ class FIREWord(Module):
 
     @torch.no_grad()
     def most_similar(
-        self, word: str, k: int = 10, p: float = 0.3,
+        self,
+        word: str,
+        k: int = 10,
+        p: float = 0.3,
     ) -> List[Tuple[str, float]]:
         """Return the most similar `k` words to `word`, as well as the (frequency-adjusted) similarity scores.
 
