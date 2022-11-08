@@ -252,7 +252,7 @@ class FIRETensor:
 
     def __repr__(self):
         return (
-            f"<(funcs={self.funcs.__class__.__name__}, "
+            f"<FIRETensor(funcs={self.funcs.__class__.__name__}, "
             f"measures={self.measures.__class__.__name__}), "
             f"shape={self.funcs.shape}>"
         )
