@@ -16,7 +16,6 @@ from sklearn.cluster import DBSCAN
 from sklearn.metrics import accuracy_score
 
 from firelang.models import FIREWord, FIRETensor
-from firelang.models import PFIREWord
 from firelang.utils.log import logger
 from firelang.utils.timer import Timer, elapsed
 from scripts.sentsim import sentsim_as_weighted_wordsim_cuda
@@ -250,13 +249,15 @@ def benchmark_word_similarity(
         with Timer(elapsed, "similarity", sync_cuda=True):
             x1: FIRETensor = model.forward(pairs[..., 0])
             x2: FIRETensor = model.forward(pairs[..., 1])
-            preds = x1.measures.integral(x2.funcs - x1.funcs) + x2.measures.integral(x1.funcs - x2.funcs)
+            preds = x1.measures.integral(x2.funcs - x1.funcs) + x2.measures.integral(
+                x1.funcs - x2.funcs
+            )
 
         """ smoothing by standardization """
+
         def _estimate_mean_var(func, measure):
-            sims = (
-                xall.measures.integral(func, cross=True)
-                + torch.transpose(measure.integral(xall.funcs, cross=True), -2, -1)
+            sims = xall.measures.integral(func, cross=True) + torch.transpose(
+                measure.integral(xall.funcs, cross=True), -2, -1
             )
             sims = sims - (
                 measure.integral(func).reshape(-1, 1)
@@ -276,59 +277,6 @@ def benchmark_word_similarity(
                 sims1std * sims2std
             ) ** 0.5
             preds = preds.exp()
-            preds = preds.data.cpu().numpy()
-
-        """ spearmann """
-        r = spearmanr(labels, preds)
-        scores[bname] = r.correlation
-    return pd.Series(scores)
-
-
-@torch.no_grad()
-@Timer(elapsed, "wordsim")
-def benchmark_word_similarity_pfire(
-    model: PFIREWord, benchmarks: Mapping[str, SimilarityBenchmark]
-):
-    vocab: Vocab = model.vocab
-    device = model.detect_device()
-
-    scores = {}
-    for bname, benchmark in benchmarks.items():
-        benchmark: SimilarityBenchmark
-
-        pairs, pairs_str, labels = [], [], []
-        oov_words = set()
-        for (word1, word2, wseq1, wseq2, sim) in iter(benchmark):
-            pairs_str.append((word1, word2))
-            labels.append(sim)
-
-            pair = []
-            for w in [word1, word2]:
-                pair.append(vocab.s2i.get(w, vocab.unk_id))
-                if w not in vocab:
-                    oov_words.add(w)
-            pairs.append(pair)
-
-        labels = np.array(labels)
-        pairs = torch.tensor(pairs, device=device, dtype=torch.long)
-
-        if len(oov_words) and not _cache.get(f"oov_reported/{bname}", False):
-            logger.warning(
-                f"Benchmark {bname}: {len(oov_words)} words "
-                f"(in {len(benchmark)} pairs) out of vocabulary\n"
-                + ", ".join(list(oov_words))
-            )
-            _cache[f"oov_reported/{bname}"] = True
-
-        """ similarity """
-        with Timer(elapsed, "similarity", sync_cuda=True):
-
-            g1 = model.grids_byid(pairs[..., 0])
-            g2 = model.grids_byid(pairs[..., 1])
-            innerprod = (g1 * g2).sum(-1)
-            norm1 = (g1 * g1).sum(-1)
-            norm2 = (g2 * g2).sum(-1)
-            preds = innerprod / (norm1 * norm2) ** 0.5
             preds = preds.data.cpu().numpy()
 
         """ spearmann """
@@ -701,7 +649,9 @@ def benchmark_wordsense_number(
             label = w2nsense[word]
             word = word.lower()
             with Timer(elapsed, "get_relwordpos"):
-                relwordpos = get_relwordpos(xall.measures, model, word, k=1000, pca=True)
+                relwordpos = get_relwordpos(
+                    xall.measures, model, word, k=1000, pca=True
+                )
             asy = pool.apply_async(
                 detect_num_clusters_DBSCAN,
                 kwds={"relwordpos": relwordpos, "eps": eps, "minfreq": 0.000},
