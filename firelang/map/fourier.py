@@ -4,11 +4,11 @@ from .rect import (
 )
 
 __all__ = [
-    'SmoothedRectFourier2DMap',
+    "SmoothedRectFourier2DMap",
 ]
 
-class SmoothedRectFourier2DMap(SmoothedRectMap):
 
+class SmoothedRectFourier2DMap(SmoothedRectMap):
     @property
     def grid(self):
         g = SmoothedRectMap.get_grid(self)

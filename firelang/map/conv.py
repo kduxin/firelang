@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import List, Tuple, Iterable
 from typing_extensions import Literal
+import numpy as np
 import torch
 from torch import dtype, device, Tensor
 from torch.nn import Module, Parameter, ModuleList
@@ -26,13 +27,19 @@ class Conv2DGrid(Grid):
         conv_layers: int = 1,
         dtype: dtype = torch.float32,
         device: device = "cuda",
-        stack_size: int = 1,
+        shape: Tuple[int] = (1,),
     ):
         Grid.__init__(
-            self, dim_sizes=dim_sizes, dtype=dtype, device=device, stack_size=stack_size
+            self,
+            dim_sizes=dim_sizes,
+            dtype=dtype,
+            device=device,
+            shape=shape,
         )
         self.register_extra_init_kwargs(
-            conv_size=conv_size, conv_chans=conv_chans, conv_layers=conv_layers
+            conv_size=conv_size,
+            conv_chans=conv_chans,
+            conv_layers=conv_layers,
         )
         self.conv_size = conv_size
         self.conv_chans = conv_chans
@@ -43,7 +50,11 @@ class Conv2DGrid(Grid):
             in_chans = 1 if l == 0 else conv_chans
             self.conv.append(
                 torch.nn.Conv2d(
-                    in_chans, conv_chans, conv_size, padding="same", device=device
+                    in_chans,
+                    conv_chans,
+                    conv_size,
+                    padding="same",
+                    device=device,
                 )
             )
             self.unsliceable_params.add(f"conv.{l}.weight")
@@ -52,11 +63,11 @@ class Conv2DGrid(Grid):
     @property
     def gridvals(self) -> Tensor:
         assert self.ndim == 2
-        g: Parameter = self._gridvals  # (self.stack_size, n1, n2)
+        g: Parameter = self._gridvals  # (size, n1, n2)
 
-        g = g[:, None]  # (self.stack_size, 1, n1, n2)
+        g = g[:, None, :, :]  # (size, shape, 1, n1, n2)
         for layer in self.conv:
-            g = layer(g)  # (self.stack_size, channels, n1, n2)
+            g = layer(g)  # (size, channels, n1, n2)
         g = g.sum(dim=1)
         return g
 
@@ -75,11 +86,12 @@ class SmoothedRectConv2DMap(SmoothedRectMap):
         conv_layers: int = 1,
         dtype: dtype = torch.float32,
         device: device = "cuda",
-        stack_size: int = 1,
+        shape: Tuple[int] = (1,),
     ):
         Functional.__init__(self, locals())
 
-        self.stack_size = stack_size
+        self.shape = shape
+        size = int(np.prod(shape))
         self.ndim = len(grid_dim_sizes)
         self._grid = Conv2DGrid(
             grid_dim_sizes,
@@ -88,7 +100,7 @@ class SmoothedRectConv2DMap(SmoothedRectMap):
             conv_layers=conv_layers,
             dtype=dtype,
             device=device,
-            stack_size=stack_size,
+            shape=shape,
         )
 
         def _sizes_to_tensor(sizes: int | List[int], ndim: int) -> Tensor:
@@ -100,15 +112,17 @@ class SmoothedRectConv2DMap(SmoothedRectMap):
         self.grid_dim_sizes = _sizes_to_tensor(grid_dim_sizes, self.ndim)
         self.rect_dim_sizes = _sizes_to_tensor(rect_dim_sizes, self.ndim)
         self.limits = torch.tensor(
-            parse_rect_limits(limits, self.ndim), dtype=dtype, device=device
+            parse_rect_limits(limits, self.ndim),
+            dtype=dtype,
+            device=device,
         )
 
         self.rect_weight_decay = rect_weight_decay
         self.bandwidth_mode = bandwidth_mode
         self.bandwidth_lb = bandwidth_lb
         if bandwidth_mode == "constant":
-            self._bandwidth = bandwidth_lb * torch.ones(stack_size, dtype=dtype)
+            self._bandwidth = bandwidth_lb * torch.ones(size, dtype=dtype)
         elif bandwidth_mode == "parameter":
-            self._bandwidth = Parameter(torch.ones(stack_size, dtype=dtype))
+            self._bandwidth = Parameter(torch.zeros(size, dtype=dtype))
         else:
             raise ValueError(bandwidth_mode)

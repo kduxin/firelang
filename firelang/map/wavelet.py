@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import List, Tuple, Iterable
 from typing_extensions import Literal
+import numpy as np
 import torch
 from torch import Tensor, dtype, device
 from torch.nn import Parameter
@@ -26,10 +27,14 @@ class Wavelet2DMap(Grid):
         level: int = 3,
         dtype: dtype = torch.float32,
         device: device = "cuda",
-        stack_size: int = 1,
+        shape: Tuple[int] = (1,),
     ):
         Grid.__init__(
-            self, dim_sizes=dim_sizes, dtype=dtype, device=device, stack_size=stack_size
+            self,
+            dim_sizes=dim_sizes,
+            dtype=dtype,
+            device=device,
+            shape=shape,
         )
         self.register_extra_init_kwargs(
             wavelet=wavelet,
@@ -42,14 +47,14 @@ class Wavelet2DMap(Grid):
     @property
     def gridvals(self) -> Tensor:
         assert self.ndim == 2
-        g: Parameter = self._gridvals  # (self.stack_size, n1, n2)
+        g: Parameter = self._gridvals  # (size, n1, n2)
 
-        g = g[:, None]  # (self.stack_size, 1, n1, n2)
+        g = g[:, None, :, :]  # (size, 1, n1, n2)
         sizes: Tensor = self.dim_sizes
         sizes = sizes.data.cpu().numpy().tolist()
 
         coeffs = []
-        for l in range(self.level - 1):
+        for _ in range(self.level - 1):
             h, w = (sizes[0] + 1) // 2, (sizes[1] + 1) // 2
             coeff1 = g[:, :, -h:, :w]
             coeff2 = g[:, :, -h:, -w:]
@@ -59,7 +64,7 @@ class Wavelet2DMap(Grid):
 
         coeffs.append(g[:, :, :h, :w])
         coeffs = list(reversed(coeffs))
-        return ptwt.waverec2(coeffs, self.wavelet)  # (self.stack, 1, n1, n2)
+        return ptwt.waverec2(coeffs, self.wavelet)  # (size, 1, n1, n2)
 
 
 class SmoothedRectWavelet2DMap(SmoothedRectMap):
@@ -75,11 +80,12 @@ class SmoothedRectWavelet2DMap(SmoothedRectMap):
         level: str = 3,
         dtype: dtype = torch.float32,
         device: device = "cuda",
-        stack_size: int = 1,
+        shape: Tuple[int] = (1,),
     ):
         Functional.__init__(self, locals())
 
-        self.stack_size = stack_size
+        self.shape = shape
+        size = int(np.prod(shape))
         self.ndim = len(grid_dim_sizes)
         self._grid = Wavelet2DMap(
             grid_dim_sizes,
@@ -87,7 +93,7 @@ class SmoothedRectWavelet2DMap(SmoothedRectMap):
             level=level,
             dtype=dtype,
             device=device,
-            stack_size=stack_size,
+            shape=shape,
         )
 
         def _sizes_to_tensor(sizes: int | List[int], ndim: int) -> Tensor:
@@ -99,15 +105,17 @@ class SmoothedRectWavelet2DMap(SmoothedRectMap):
         self.grid_dim_sizes = _sizes_to_tensor(grid_dim_sizes, self.ndim)
         self.rect_dim_sizes = _sizes_to_tensor(rect_dim_sizes, self.ndim)
         self.limits = torch.tensor(
-            parse_rect_limits(limits, self.ndim), dtype=dtype, device=device
+            parse_rect_limits(limits, self.ndim),
+            dtype=dtype,
+            device=device,
         )
 
         self.rect_weight_decay = rect_weight_decay
         self.bandwidth_mode = bandwidth_mode
         self.bandwidth_lb = bandwidth_lb
         if bandwidth_mode == "constant":
-            self._bandwidth = bandwidth_lb * torch.ones(stack_size, dtype=dtype)
+            self._bandwidth = bandwidth_lb * torch.ones(size, dtype=dtype)
         elif bandwidth_mode == "parameter":
-            self._bandwidth = Parameter(torch.ones(stack_size, dtype=dtype))
+            self._bandwidth = Parameter(torch.zeros(size, dtype=dtype))
         else:
             raise ValueError(bandwidth_mode)

@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import List, Iterable
+from typing import List, Tuple, Iterable
+import numpy as np
 from numba import cuda
 import torch
 from torch import Tensor, dtype, device
@@ -16,13 +17,11 @@ class Grid(StackingSlicing):
         dim_sizes: List[int],
         dtype: dtype = torch.float32,
         device: device = "cuda",
-        stack_size: int = 1,
+        shape: Tuple[int] = (1,),
     ):
         StackingSlicing.__init__(self, locals())
         self._gridvals = Parameter(
-            torch.empty(stack_size, *dim_sizes, dtype=dtype, device=device).normal_(
-                0, 0.1
-            )
+            torch.empty(*shape, *dim_sizes, dtype=dtype, device=device).normal_(0, 0.1)
         )
         self.dim_sizes = torch.tensor(dim_sizes, dtype=torch.long, device=device)
         self.ndim = len(dim_sizes)
@@ -38,14 +37,13 @@ class Grid(StackingSlicing):
         self,
         corners: Tensor,
         rect_dim_sizes: int | List[int] | Tensor,
-        cross: bool = False,
     ) -> Tensor:
-        """Slice batches of (hyper-)rectangles from the d-dim grid that are specified
-        by `corners` and `rect_dim_sizes`.
+        """Parallelized slicing of (hyper-)rectangles from the d-dim grid
+        that are specified by `corners` and `rect_dim_sizes`.
 
         Args:
-            - corners (Tensor): (measure_stack, batch_size, ndim). \
-                If cross == False: measure_stack must be equal to self.stack_size
+            - corners (Tensor): (...xshape, ndim). The i-th corner out of `xshape` corners
+                is aligned with the i-th grid of self._gridvals.
             - rect_dim_sizes (int | List[int] | Tensor): rect_dim_sizes at each dimension of the rectangle. \
                 If is a `int`, it gives the size at all dimensions.
 
@@ -55,15 +53,13 @@ class Grid(StackingSlicing):
 
         Returns:
             - Tensor: let each rectangle be represented by (n1, n2, ..., nd), returns
-                a Tensor with shape:
-                - if cross == False: (measure_size, batch_size, n1, n2, ..., nd),
-                - else: (self.stack_size, measure_size, batch_size, n1, n2, ..., nd).
+                a Tensor with shape: (...shape, n1, n2, ..., nd),
         """
-        measure_stack, batch_size, ndim = corners.shape
+        (*shape, ndim) = corners.shape
+        size = int(np.prod(shape))
         device, dtype = corners.device, corners.dtype
 
         grid_dim_sizes = self.dim_sizes.to(device)
-        stack_size = self.stack_size
 
         if not isinstance(rect_dim_sizes, Iterable):
             rect_dim_sizes = [rect_dim_sizes] * len(ndim)
@@ -71,44 +67,42 @@ class Grid(StackingSlicing):
             assert len(rect_dim_sizes) == ndim
         if not isinstance(rect_dim_sizes, Tensor):
             rect_dim_sizes = torch.tensor(
-                rect_dim_sizes, dtype=torch.long, device=device
+                rect_dim_sizes,
+                dtype=torch.long,
+                device=device,
             )
 
-        corners = corners.reshape(measure_stack * batch_size, ndim)
+        """ Compute the offsets for all grid points within the rectangle,
+            which will be used in torch.take(...).
+        """
+        corners = corners.reshape(size, ndim)
         offsets = torch.zeros(
-            measure_stack * batch_size,
-            torch.prod(rect_dim_sizes),
+            size,
+            int(np.prod(rect_dim_sizes.data.cpu().numpy())),
             dtype=torch.long,
             device=device,
         )
-
         BLOCKDIM_X = 512
-        n_block = (measure_stack * batch_size + BLOCKDIM_X - 1) // BLOCKDIM_X
+        n_block = (size + BLOCKDIM_X - 1) // BLOCKDIM_X
         rectangle_offsets_in_grid_kernel[n_block, BLOCKDIM_X](
             cuda.as_cuda_array(corners),
             cuda.as_cuda_array(grid_dim_sizes),
             cuda.as_cuda_array(rect_dim_sizes),
-            measure_stack * batch_size,
+            size,
             ndim,
             cuda.as_cuda_array(offsets),
         )
+        offsets = offsets.reshape(*shape, *rect_dim_sizes.tolist())
+        # (*shape, n1, n2, ..., nd)
 
-        offsets = offsets.reshape(measure_stack, batch_size, *rect_dim_sizes.tolist())
-        # (measure_stack, batch_size, n1, n2, ..., nd)
-
-        grid_size = torch.prod(grid_dim_sizes)
-        if not cross:
-            stack_offsets = (
-                torch.arange(measure_stack, dtype=torch.long, device=device) * grid_size
-            ).reshape(-1, 1, *[1 for _ in range(ndim)])
-            # (measure_stack, 1 (batch_size), 1, ..., 1), length=2+ndim.
-            offsets = offsets + stack_offsets
-        else:
-            stack_offsets = (
-                torch.arange(stack_size, dtype=torch.long, device=device) * grid_size
-            ).reshape(-1, 1, 1, *[1 for _ in range(ndim)])
-            # (self.stack_size, 1 (measure_stack), 1 (batch_size), 1, ..., 1), length=3+ndim.
-            offsets = offsets[None] + stack_offsets
+        """ Consider additional offset caused by `shape` """
+        grid_size = int(np.prod(grid_dim_sizes.data.cpu().numpy()))
+        stack_offsets = (
+            torch.arange(int(np.prod(self.shape)), dtype=torch.long, device=device)
+            * grid_size
+        ).reshape(*self.shape, *[1] * ndim)
+        # (*self.shape, 1, ..., 1)
+        offsets = offsets + stack_offsets
 
         rectangle_vals = self.gridvals.take(offsets)
         return rectangle_vals
