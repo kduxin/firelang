@@ -4,7 +4,8 @@ import operator as op
 import numpy as np
 from torch.nn import Module, ModuleList
 import firelang
-from firelang.stack import StackingSlicing, _parse_shape
+from firelang.stack import StackingSlicing
+from firelang.utils.shape import parse_shape
 
 __all__ = ["Functional"]
 
@@ -148,7 +149,7 @@ class Functional(StackingSlicing):
         return newop
 
     def view(self, *shape, inplace: bool = False):
-        shape = _parse_shape(shape, num_elements=int(np.prod(self.shape)))
+        shape = parse_shape(shape, num_elements=int(np.prod(self.shape)))
 
         if inplace:
             if self.is_leaf():
@@ -163,7 +164,9 @@ class Functional(StackingSlicing):
                 newop = StackingSlicing.view(self, shape)
             else:
                 prev = [
-                    Functional.view(node, shape) if isinstance(node, Functional) else node
+                    Functional.view(node, shape)
+                    if isinstance(node, Functional)
+                    else node
                     for node in self.prev
                 ]
                 newop = prev[0].apply_op(self.operator, *prev[1:])
