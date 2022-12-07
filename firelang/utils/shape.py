@@ -1,7 +1,8 @@
 from __future__ import annotations
-from typing import Tuple, Iterable
+from typing import Tuple, Iterable, Union
 import numpy as np
 
+ShapeLike = Union[int, Tuple[int]]
 
 def check_shape_consistency(shape1: Tuple[int], shape2: Tuple[int]):
     assert len(shape1) == len(
@@ -10,6 +11,7 @@ def check_shape_consistency(shape1: Tuple[int], shape2: Tuple[int]):
     for d1, d2 in zip(shape1, shape2):
         if d1 != 1 and d2 != 1 and d1 != d2:
             raise ValueError(f"Inconsistent shape: {shape1} and {shape2}")
+    return True
 
 
 def parse_shape(shape, num_elements):

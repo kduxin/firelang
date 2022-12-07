@@ -87,8 +87,8 @@ The models will be downloaded to `checkpoints/` and decompressed.
 
 The saved models can be reloaded by
 ```python
-import torch
-model = torch.load('checkpoints/wacky_mlplanardiv_d2_l4_k10')
+import firelang
+model = firelang.FireWord.from_pretrained('checkpoints/v1.1/wacky_mlplanardiv_d2_l4_k10')
 ```
 
 ## 2. Run benchmarks

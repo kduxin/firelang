@@ -1,11 +1,19 @@
 BASE_URL="https://www.cl.rcast.u-tokyo.ac.jp/~duxin/firelang/pretrained/word/"
-MODEL_23="wacky_mlplanardiv_d2_l4_k1_polysemy.gz"
-MODEL_50="wacky_mlplanardiv_d2_l4_k10.gz"
-MODEL_100="wacky_mlplanardiv_d2_l8_k20.gz"
+VERSION="v1.1/"
+MODEL_23="wacky_mlplanardiv_d2_l4_k1_polysemy.tar.gz"
+MODEL_50="wacky_mlplanardiv_d2_l4_k10.tar.gz"
+MODEL_100="wacky_mlplanardiv_d2_l8_k20.tar.gz"
 
-mkdir -p checkpoints
-wget "$BASE_URL$MODEL_23" -O checkpoints/$MODEL_23
-wget "$BASE_URL$MODEL_50" -O checkpoints/$MODEL_50
-wget "$BASE_URL$MODEL_100" -O checkpoints/$MODEL_100
+mkdir -p checkpoints/$VERSION
 
-gzip -d checkpoints/*
+wget "$BASE_URL$VERSION$MODEL_23" -O checkpoints/$VERSION$MODEL_23
+tar zxvf checkpoints/$VERSION$MODEL_23 -C checkpoints/$VERSION
+rm checkpoints/$VERSION$MODEL_23
+
+wget "$BASE_URL$VERSION$MODEL_50" -O checkpoints/$VERSION$MODEL_50
+tar zxvf checkpoints/$VERSION$MODEL_50 -C checkpoints/$VERSION
+rm checkpoints/$VERSION$MODEL_50
+
+wget "$BASE_URL$VERSION$MODEL_100" -O checkpoints/$VERSION$MODEL_100
+tar zxvf checkpoints/$VERSION$MODEL_100 -C checkpoints/$VERSION
+rm checkpoints/$VERSION$MODEL_100

@@ -8,6 +8,7 @@ from .components import (
 from .components import (
     _Forward,
     _Divergence,
+    _DivergenceViaQuadform,
     _Jacdet,
     _Jaclogdet,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "MLP",
     "MLPDiv",
     "MLPlanarDiv",
+    "MLPlanarDivFast",
     "MLPlanarJacdet",
     "MLPlanarJaclogdet",
 ]
@@ -36,6 +38,10 @@ class MLPDiv(_Divergence, _MLPInit):
 
 
 class MLPlanarDiv(_Divergence, _MLPlanarInit):
+    pass
+
+
+class MLPlanarDivFast(_DivergenceViaQuadform, _MLPlanarInit):
     pass
 
 

@@ -11,8 +11,7 @@ python -m scripts.train \
     --optimizer=adamw \
     --seed=0 \
     --accum_steps=10 \
-    --func='MLPlanarDiv(args.dim, 4)' \
-    --measure='DiracMixture(args.dim, 10)' \
+    --func='MLPlanarDivFast(dim, 4)' \
+    --measure='DiracMixture(dim, 10)' \
     --weight_decay=1e-6 \
-    --use_wandb \
-    --amp
+    --use_wandb

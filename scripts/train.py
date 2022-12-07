@@ -20,8 +20,7 @@ from torch.cuda.amp import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 
 from corpusit import Vocab, SkipGramDataset
-from firelang import FIREWord, PFIREWord
-from firelang.utils.parse import parse_func, parse_measure
+from firelang import FireWord, FireWordConfig, FireTensor
 from firelang.utils.optim import DummyScheduler
 from firelang.utils.log import logger
 from firelang.utils.timer import elapsed, Timer
@@ -30,7 +29,6 @@ from scripts.benchmark import (
     ALL_WORDSIM_BENCHMARKS,
     load_word_benchmark,
     benchmark_word_similarity,
-    benchmark_word_similarity_pfire,
 )
 
 
@@ -38,8 +36,7 @@ logger.setLevel(level=os.environ.get("LOGLEVEL", "DEBUG").upper())
 
 try:
     import wandb
-    from wandb_config import config
-    from wandb_config import download_wandb_file
+    from wandb_config import download_wandb_files
 except Exception as e:
     logger.warn(
         "Unable to import wandb for experiment tracking. "
@@ -51,7 +48,10 @@ total_timer = Timer(elapsed, "total")
 
 @total_timer
 def train(args):
+    torch.set_num_threads(1)
     if args.use_wandb:
+        from wandb_config import config
+
         config()
         exp_name = "".join(random.choices(ascii_uppercase + digits, k=8))
         args.savedir = f"{args.savedir}/{exp_name}/"
@@ -93,29 +93,16 @@ def train(args):
 
     set_seed(args.seed)
     if not (args.use_wandb and args.wandb_pretrained):
-        func_template = parse_func(args.func, args).to(device)
-        measure_template = parse_measure(args.measure, args).to(device)
-        if args.model == "FIREWord":
-            model = FIREWord(
-                func_template,
-                measure_template,
-                args.dim,
-                vocab,
-            )
-        elif args.model == "PFIREWord":
-            model = PFIREWord(
-                func_template,
-                args.grid_limits,
-                args.grid_dim_sizes,
-                vocab,
-            )
+        config = FireWordConfig(dim=args.dim, func=args.func, measure=args.measure)
+        if args.model.lower() == "fireword":
+            model = FireWord(config=config, vocab=vocab)
         else:
             raise ValueError(args.model)
     else:
-        model = torch.load(
-            download_wandb_file(args.wandb_pretrained, "best"),
-            map_location="cpu",
-        )
+        if args.model.lower() == "fireword":
+            model = FireWord.from_pretrained(
+                download_wandb_files(args.wandb_pretrained, "best")
+            )
         wandb.config.update({"continue": True, "previous_run": args.wandb_pretrained})
     logger.info(model)
     num_parameters = count_parameters(model) // len(vocab)
@@ -183,15 +170,8 @@ def train(args):
         """ ----------------- forward pass -------------------"""
         with prof, autocaster, Timer(elapsed, "forward", sync_cuda=True):
             if args.task == "skipgram":
-                if args.model == "FIREWord":
-                    model: FIREWord
-                    loss = model.loss_skipgram(
-                        inputs,
-                        labels,
-                        args,
-                    )
-                elif args.model == "PFIREWord":
-                    model: PFIREWord
+                if args.model.lower() == "fireword":
+                    model: FireWord
                     loss = model.loss_skipgram(
                         inputs,
                         labels,
@@ -212,6 +192,7 @@ def train(args):
                 scaler.scale(steploss).backward()
             else:
                 steploss.backward()
+
             grad_norm = (
                 torch.cat([p.grad.data.reshape(-1) for p in model.parameters()])
                 .norm()
@@ -254,17 +235,9 @@ def train(args):
 
             """--------------- similarity benchmark ---------------"""
             with Timer(elapsed, "benchmark", sync_cuda=True):
-                if args.model == "FIREWord":
+                if args.model.lower() == "fireword":
                     simscores = (
                         benchmark_word_similarity(
-                            model,
-                            benchmarks,
-                        )
-                        * 100
-                    )
-                elif args.model == "PFIREWord":
-                    simscores = (
-                        benchmark_word_similarity_pfire(
                             model,
                             benchmarks,
                         )
@@ -277,7 +250,7 @@ def train(args):
                 best_iter = i
                 best_simscore = simscore
                 best_loss = total_loss.item()
-                torch.save(model, best_savepath)
+                model.save(best_savepath)
 
             if args.task == "skipgram":
                 n_pos = labels.sum()
@@ -306,17 +279,15 @@ def train(args):
                 }
                 if args.dim == 2:
                     """---------------- visualize ----------------"""
-                    if args.model == "FIREWord":
+                    if args.model.lower() == "fireword":
                         fig = visualize_fire(model, args.plot_words)
-                    elif args.model == "PFIREWord":
-                        fig = visualize_pfire(model, args.plot_words)
                     else:
                         raise ValueError(args.model)
                     img = wandb.Image(_fig2array(fig))
                     plt.close(fig)
                     loginfo["wordfig"] = img
                 wandb.log(loginfo)
-                wandb.save(best_savepath, args.savedir, policy="end")
+                wandb.save(f"{best_savepath}/**", args.savedir, policy="end")
 
             model.train()
 
@@ -359,11 +330,14 @@ def _fig2array(fig):
 
 
 @torch.no_grad()
-def visualize_fire(model: FIREWord, words: List[str], r: float = 4):
-    _, measure = model[words]
+def visualize_fire(model: FireWord, words: List[str], r: float = 4):
+    ft: FireTensor = model[words]
+    measure = ft.measures
     positions = measure.get_x()
     weights = (
-        torch.ones(x.shape[0], x.shape[1], dtype=x.dtype, device=x.device)
+        torch.ones(
+            positions.shape[0], positions.shape[1], dtype=x.dtype, device=x.device
+        )
         if isinstance(measure.m, float)
         else measure.m.abs()
     )
@@ -412,33 +386,6 @@ def visualize_fire(model: FIREWord, words: List[str], r: float = 4):
     return fig
 
 
-@torch.no_grad()
-def visualize_pfire(model: PFIREWord, words):
-    limits = model.limits
-    meshx, meshy = torch.meshgrid(
-        torch.linspace(*limits[0], 100), torch.linspace(*limits[1], 100)
-    )
-    grids = model.grids(words, reshape=True, meshx=meshx, meshy=meshy)  # (stack, n, n)
-
-    grids = grids.data.cpu().numpy()  # (stack, n, n)
-    meshx = meshx.data.cpu().numpy()
-    meshy = meshy.data.cpu().numpy()
-
-    naxes = len(words)
-    ncols = 8
-    fig = plt.figure(figsize=(4 * ncols / (ncols - 1), 4 * naxes))
-    gs = fig.add_gridspec(naxes, ncols)
-    for i, (word, grid) in enumerate(zip(words, grids)):
-        ax = fig.add_subplot(gs[i, : ncols - 1])
-        ax.set_title(word)
-        cont = ax.contourf(meshx, meshy, grid)
-        ax = fig.add_subplot(gs[i, -1])
-        fig.colorbar(cont, cax=ax)
-
-    fig.subplots_adjust(right=0.8)
-    return fig
-
-
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
@@ -458,9 +405,7 @@ def parse_arguments():
         type=str,
         default=None,
     )
-    parser.add_argument(
-        "--model", type=str, default="FIREWord", choices=["FIREWord", "PFIREWord"]
-    )
+    parser.add_argument("--model", type=str, default="FireWord", choices=["FireWord"])
     parser.add_argument("--task", type=str, default="skipgram", choices=["skipgram"])
 
     # ----- fire model settings -----

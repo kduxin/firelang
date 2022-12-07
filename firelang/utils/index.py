@@ -1,16 +1,17 @@
 from __future__ import annotations
-from typing import List, Tuple, Union, Any
+from typing import List, Tuple, Union, Any, Iterable
 import numpy as np
 import torch
 from torch import Tensor
+from .shape import ShapeLike
 
 IndexLike = Union[
     int, slice, List, Tensor, None, Tuple[Union[int, slice, List, Tensor, None]]
 ]
 
 
-def parse_index(index: IndexLike, shape: Tuple[int]) -> Tensor:
-    if not isinstance(index, tuple):
+def flatten_index(index: IndexLike, shape: Tuple[int]) -> Tensor:
+    if not isinstance(index, Iterable):
         index = (index,)
     index = _complete_ellipsis(index, ndim=len(shape))
 
@@ -73,3 +74,49 @@ def _complete_ellipsis(index: Tuple[Any | Ellipsis], ndim: int):
         list(index[:i]) + [slice(None)] * (ndim - len(index) + 1) + list(index[i + 1 :])
     )
     return tuple(completed)
+
+
+def normalize_index(index: IndexLike, shape: ShapeLike):
+    if not isinstance(shape, Iterable):
+        shape = [shape]
+    if not isinstance(index, Iterable):
+        normalized = normalize_index([index], shape)
+        return normalized[0]
+    
+    index = _complete_ellipsis(index, ndim=len(shape))
+    assert len(index) == len(shape)
+    normalized = []
+    for dim, (index_at_dim, size_at_dim) in enumerate(zip(index, shape)):
+
+        if isinstance(index_at_dim, int):
+            assert -size_at_dim <= index_at_dim < size_at_dim
+            if index_at_dim < 0:
+                index_at_dim += size_at_dim
+            normalized.append(index_at_dim)
+        elif isinstance(index_at_dim, slice):
+            index_at_dim = list(range(size_at_dim))[index_at_dim]
+            normalized.append(index_at_dim)
+        elif isinstance(index_at_dim, list):
+            nonneg = []
+            for idx in index_at_dim:
+                assert -size_at_dim <= idx < size_at_dim
+                if idx < 0:
+                    idx += size_at_dim
+                nonneg.append(idx)
+            normalized.append(nonneg)
+        elif isinstance(index_at_dim, Tensor):
+            assert index_at_dim.ndim == 1, (
+                f"Index at dimension {dim} should be 1-dimensional, "
+                f"not {index_at_dim.ndim}-d."
+            )
+            assert (-size_at_dim <= index_at_dim).all() and (index_at_dim < size_at_dim).all()
+            index_at_dim = index_at_dim.data.cpu().numpy()
+            index_at_dim[index_at_dim < 0] += size_at_dim
+            normalized.append(index_at_dim.tolist())
+        else:
+            raise TypeError(
+                f"Index at dimension {dim} should be "
+                f"a `int`, a `slice`, or a `Tensor`, not {type(index_at_dim)}"
+            )
+
+    return normalized

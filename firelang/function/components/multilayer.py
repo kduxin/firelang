@@ -17,6 +17,7 @@ __all__ = [
     "_MLPlanarInit",
     "_Forward",
     "_Divergence",
+    "_DivergenceViaQuadform",
     "_Jacdet",
     "_Jaclogdet",
 ]
@@ -36,7 +37,11 @@ class _MLPInit(Functional):
         norm: Literal[None, "batch", "layer"] = None,
         shape: int | Tuple[int] = (1,),
     ):
-        Functional.__init__(self, locals())
+        Functional.__init__(
+            self,
+            locals_={**locals(), "shape_out": shape},
+            is_fleaf=True,
+        )
         dims = [input_dim] + hidden_dims
         layer_kwargs = {"activation": activation, "norm": norm}
         last_layer_kwargs = {"activation": None, "norm": None}
@@ -55,14 +60,17 @@ class _MLPInit(Functional):
         self.input_dim = input_dim
         self.hidden_dims = hidden_dims
         self.dims = dims
-        self.shape = shape
         self.activation = activation
         self.norm = norm
 
 
 class _MLPlanarInit(Functional):
     def __init__(self, dim, nlayers, shape=(1,), **planar_kwargs):
-        Functional.__init__(self, locals())
+        Functional.__init__(
+            self,
+            locals_={**locals(), "shape_out": shape},
+            is_fleaf=True,
+        )
         self.layers = ModuleList(
             [
                 PseudoPlanarTransform(dim=dim, shape=shape, **planar_kwargs)
@@ -143,6 +151,43 @@ class _Divergence(_MultiLayerBase):
         return div
 
 
+class _DivergenceViaQuadform(_MultiLayerBase):
+    """
+    Compute divergence indirectly via quadratic forms:
+      tr(A) = u1^T @ A @ u1 + ... + uD^T @ A @ uD,
+      where ui is the i-th column of an D-by-D identity matrix.
+    This way of computation is especially fast for backward pass.
+    Each layer should implement .jacob_mul_vecs method.
+    """
+
+    def forward(self, x: Tensor) -> Tensor:
+        dim = x.shape[-1]
+
+        """ Estimate tr(A) by E[z^T @ A @ z], where z is selected as the columns of an identity matrix"""
+        """ Initialize z's as the columns of an identity matrix `vecs` """
+        vecs = torch.eye(dim, dtype=x.dtype, device=x.device)  # (nvecs, dim)
+        # vecs = vecs[None, None]  # (1, 1, nvecs, dim)
+
+        jacob_mul_vecs = vecs
+        for i, layer in enumerate(self.layers):
+            """Compute A @ z, and then A @ (A @ z), ..."""
+            if i < len(self.layers) - 1:
+                jacob_mul_vecs, x = layer.jacob_mul_vecs(
+                    x, jacob_mul_vecs, return_fx=True
+                )
+            else:  # last iter
+                jacob_mul_vecs = layer.jacob_mul_vecs(
+                    x, jacob_mul_vecs, return_fx=False
+                )
+
+        """ Compute z^T @ (A @ z) """
+        dots = torch.einsum("...i,...i->...", vecs, jacob_mul_vecs)
+
+        # compute trace by summing up the dots of all vecs
+        div = dots.sum(dim=-1)
+
+        dim = x.shape[-1]
+        div = div / dim
         return div
 
 
