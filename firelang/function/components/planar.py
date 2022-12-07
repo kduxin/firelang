@@ -18,10 +18,9 @@ class PseudoPlanarTransform(Functional):
         Functional.__init__(self, locals())
 
         scale = 0.1 / dim**0.5
-        size = int(np.prod(shape))
-        self.v = Parameter(torch.randn(size, dim).normal_(0, scale))
-        self.b = Parameter(torch.randn(size, 1).normal_(0, scale))
-        self.u = Parameter(torch.randn(size, dim).normal_(0, scale))
+        self.v = Parameter(torch.empty(*shape, dim).normal_(0, scale))
+        self.b = Parameter(torch.empty(*shape).normal_(0, scale))
+        self.u = Parameter(torch.empty(*shape, dim).normal_(0, scale))
 
         if activation is None:
             self.act, self.actderiv = identity, identity_deriv
@@ -52,9 +51,7 @@ class PseudoPlanarTransform(Functional):
         (*xshape, dim) = x.shape
         check_shape_consistency(fshape, xshape)
 
-        v = self.v.view(*fshape, self.dim)
-        b = self.b.view(*fshape)
-        u = self.u.view(*fshape, self.dim)
+        u, v, b = self.u, self.v, self.b
 
         a = torch.einsum("...i,...i->...", x, v) + b  # (...shape,)
         fx = x + self.act(a)[..., None] * u  # (...shape, dim)
@@ -75,13 +72,11 @@ class PseudoPlanarTransform(Functional):
         (*xshape, dim) = x.shape
         check_shape_consistency(fshape, xshape)
 
-        v = self.v.view(*fshape, self.dim)
-        b = self.b.view(*fshape)
-        u = self.u.view(*fshape, self.dim)
-
         I = torch.eye(dim, device=x.device, dtype=x.dtype).reshape(
             *[1 for _ in xshape], dim, dim
         )
+
+        u, v, b = self.u, self.v, self.b
 
         a = torch.einsum("...i,...i->...", x, v) + b
         ad = self.actderiv(a)
@@ -109,9 +104,7 @@ class PseudoPlanarTransform(Functional):
         (*xshape, dim) = x.shape
         check_shape_consistency(fshape, xshape)
 
-        v = self.v.view(*fshape, self.dim)
-        b = self.b.view(*fshape)
-        u = self.u.view(*fshape, self.dim)
+        u, v, b = self.u, self.v, self.b
 
         u_dot_v = torch.einsum("...i,...i->...", u, v)  # (...fshape,)
         a = torch.einsum("...i,...i->...", x, v) + b  # (...fshape,)
@@ -123,3 +116,38 @@ class PseudoPlanarTransform(Functional):
             return jacdet, fx
         else:
             return jacdet
+
+    def jacob_mul_vecs(
+        self, x: Tensor, vecs: Tensor, return_fx: bool = False
+    ) -> Tensor:
+        """Compute (df(x) / dx) @ vec
+
+        Args:
+            x (Tensor): (...shape, dim)
+            vecs (Tensor): (...shape, nvecs, dim)
+            return_fx (bool, optional): whether returns f(x) or not. Defaults to False.
+
+        Returns:
+            Tensor: (...shape, nvecs, dim)
+        """
+        fshape = self.shape
+        (*xshape, dim) = x.shape
+        check_shape_consistency(fshape, xshape)
+
+        u, v, b = self.u, self.v, self.b
+
+        a = torch.einsum("...i,...i->...", x, v) + b  # (...fshape,)
+        ad = self.actderiv(a)  # (...fshape,)
+
+        v_dot_vecs = torch.einsum("...i,...ni->...n", v, vecs)  # (...fshape, nvecs)
+        scalar = ad[..., None] * v_dot_vecs  # (...fshape, nvecs)
+
+        jacob_mul_vecs = (
+            vecs + scalar[..., None] * u[..., None, :]
+        )  # (...fshape, nvecs, dim)
+
+        if return_fx:
+            fx = x + self.act(a)[..., None] * u  # (...shape, dim)
+            return jacob_mul_vecs, fx
+        else:
+            return jacob_mul_vecs

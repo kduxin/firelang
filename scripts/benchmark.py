@@ -15,7 +15,7 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import DBSCAN
 from sklearn.metrics import accuracy_score
 
-from firelang.models import FIREWord, FIRETensor
+from firelang.models import FireWord, FireTensor
 from firelang.utils.log import logger
 from firelang.utils.timer import Timer, elapsed
 from scripts.sentsim import sentsim_as_weighted_wordsim_cuda
@@ -212,7 +212,7 @@ _cache = defaultdict(dict)
 @torch.no_grad()
 @Timer(elapsed, "wordsim")
 def benchmark_word_similarity(
-    model: FIREWord, benchmarks: Mapping[str, SimilarityBenchmark]
+    model: FireWord, benchmarks: Mapping[str, SimilarityBenchmark]
 ):
     vocab: Vocab = model.vocab
     device = model.detect_device()
@@ -407,7 +407,7 @@ def load_all_sentsim_benchmarks(dirpath=DEFAULT_SENTSIM_DIR, lower=True):
 @torch.no_grad()
 @Timer(elapsed, "sentsim")
 def benchmark_sentence_similarity(
-    model: FIREWord,
+    model: FireWord,
     benchmarks: Mapping[str, SimilarityBenchmark],
     sif_alpha=1e-3,
 ):
@@ -627,7 +627,7 @@ def get_relwordpos(allmeasures, model, centerword, k=1000, pca=False):
 @torch.no_grad()
 @Timer(elapsed, "wordsense")
 def benchmark_wordsense_number(
-    model: FIREWord,
+    model: FireWord,
     w2nsense,
     num_workers=os.cpu_count(),
     eps=0.4,
@@ -679,16 +679,16 @@ if __name__ == "__main__":
         "--checkpoints_for_similarity",
         nargs="+",
         default=[
-            "checkpoints/wacky_mlplanardiv_d2_l4_k1_polysemy",
-            "checkpoints/wacky_mlplanardiv_d2_l4_k10",
-            "checkpoints/wacky_mlplanardiv_d2_l8_k20",
+            "checkpoints/v1.1/wacky_mlplanardiv_d2_l4_k1_polysemy",
+            "checkpoints/v1.1/wacky_mlplanardiv_d2_l4_k10",
+            "checkpoints/v1.1/wacky_mlplanardiv_d2_l8_k20",
         ],
     )
     parser.add_argument(
         "--checkpoints_for_polysemy",
         nargs="+",
         default=[
-            "checkpoints/wacky_mlplanardiv_d2_l4_k1_polysemy",
+            "checkpoints/v1.1/wacky_mlplanardiv_d2_l4_k1_polysemy",
         ],
     )
     args = parser.parse_args()
@@ -696,7 +696,7 @@ if __name__ == "__main__":
     for checkpoint in args.checkpoints_for_similarity:
         elapsed.clear()
         print(f"=============== Checkpoint `{checkpoint}` ================")
-        model = torch.load(checkpoint, map_location=device)
+        model = FireWord.from_pretrained(checkpoint).to(device)
 
         print("------------- word similarity -------------")
         benchmarks = load_all_word_benchmarks()
@@ -728,7 +728,7 @@ if __name__ == "__main__":
             f"========= Word polysemy detection with checkpoint `{checkpoint}` ========="
         )
         w2nsense = load_numwordsense("data/wordnet-542.txt")
-        model = torch.load(checkpoint, map_location=device)
+        model = FireWord.from_pretrained(checkpoint).to(device)
         acc, corr = benchmark_wordsense_number(model, w2nsense, eps=0.40)
         print(
             f"Accuracy = {acc*100:.3g}%, Pearson Correlation Coefficient = {corr:.3g}"

@@ -20,6 +20,7 @@ settings = {
 
 api = None
 
+
 def config():
     for k, v in settings.items():
         os.environ[k] = v
@@ -32,7 +33,19 @@ def download_wandb_file(runid: str, path) -> Union[str, Path]:
     if api is None:
         config()
     run = api.run(runid)
-    file = run.file('best').download(f'{wandb_dir}/download-{runid}',
-                                     replace=True)
-    logging.info(f'Downloaded file from wandb://{runid}/{path}')
+    file = run.file(path).download(f"{wandb_dir}/download-{runid}", replace=True)
+    print(f"Downloaded file at wandb://{runid}/{path}")
     return file.name
+
+
+def download_wandb_files(runid: str, path) -> Union[str, Path]:
+    if api is None:
+        config()
+    run = api.run(runid)
+    files = run.files()
+    save_dir = f"{wandb_dir}/download-{runid}"
+    for file in files:
+        if file.name.startswith(path):
+            file.download(save_dir, replace=True)
+            print(f"Downloaded file at wandb://{runid}/{file.name}")
+    return f"{save_dir}/{path}"

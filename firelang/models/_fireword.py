@@ -1,51 +1,108 @@
 from __future__ import annotations
 from argparse import Namespace
 from typing import List, Union, Tuple
+from collections import OrderedDict
+import os
+import json
 import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import Module, functional as F
 
-from firelang.measure import Measure
-from firelang.function import Functional
-from firelang.stack import StackingSlicing, IndexLike
+from firelang.stack import StackingSlicing
 from firelang.measure import DiracMixture, metrics
 from firelang.utils.timer import Timer, elapsed
 from firelang.utils.optim import Loss
+from firelang.utils.log import logger
+from firelang.utils.parse import parse_func, parse_measure
+from . import FireTensor
 
 from corpusit import Vocab
 
 __all__ = [
+    "FireEmbedding",
+    "FireWord",
+    "FireWordConfig",
     "FIREWord",
-    "FIRETensor",
 ]
 
 
-class FIREWord(Module):
+class FireEmbedding(Module):
 
     funcs: StackingSlicing
     measures: StackingSlicing
     dim: int
-    vocab: Vocab
 
     def __init__(
         self,
         func_template: StackingSlicing,
         measure_template: StackingSlicing,
-        dim,
+        vocab_size,
+    ):
+        Module.__init__(self)
+        assert func_template.dim == measure_template.dim
+        self.dim = func_template.dim
+        self.funcs: StackingSlicing = func_template.restack(vocab_size)
+        self.measures: StackingSlicing = measure_template.restack(vocab_size)
+        self.vocab_size = vocab_size
+
+    def __len__(self):
+        return self.vocab_size
+
+    def forward(self, ranks: Tensor) -> FireTensor:
+        """
+        Args:
+            ranks (Tensor): (n, ) of word ranks
+
+        Returns:
+            (Functional, Measure)
+        """
+
+        with Timer(elapsed, "slicing", sync_cuda=True), Timer(
+            elapsed, "slicing", sync_cuda=True, relative=False
+        ):
+            return FireTensor(
+                funcs=self.funcs[ranks],
+                measures=self.measures[ranks],
+            )
+
+    def detect_device(self) -> torch.device:
+        return next(iter(self.parameters())).device
+
+
+class FireWordConfig(dict):
+    dim: int
+    func: str
+    measure: str
+
+    def __init__(self, **kwargs):
+        dict.__init__(self, **kwargs)
+        self.__dict__ = self
+
+
+class FireWord(FireEmbedding):
+
+    config: FireWordConfig
+    vocab: Vocab
+
+    def __init__(
+        self,
+        config: FireWordConfig,
         vocab: Vocab,
     ):
-        super().__init__()
-        self.vocab_size = len(vocab)
-        self.funcs: StackingSlicing = func_template.restack(self.vocab_size)
-        self.measures: StackingSlicing = measure_template.restack(self.vocab_size)
-
-        self.dim = dim
+        FireEmbedding.__init__(
+            self,
+            func_template=parse_func(config.func, dim=config.dim),
+            measure_template=parse_measure(config.measure, dim=config.dim),
+            vocab_size=len(vocab),
+        )
+        self.config = config
+        self.i2rank, self.rank2i = self._ranking(vocab)
         self.vocab = vocab
-        self.i2rank, self.rank2i = self._ranking()
+        self.vocab_size = len(vocab)
 
-    def _ranking(self):
-        ids = sorted(self.vocab.i2s_dict().keys())
+    def _ranking(self, vocab):
+        ids = sorted(vocab.i2s_dict().keys())
         maxid = max(ids)
         i2rank = -np.ones(maxid + 1, dtype=np.int64)
         rank2i = -np.ones(len(ids), dtype=np.int64)
@@ -54,31 +111,7 @@ class FIREWord(Module):
             rank2i[rank] = idx
         return i2rank, rank2i
 
-    def __len__(self):
-        return self.vocab_size
-
-    def detect_device(self) -> torch.device:
-        return next(iter(self.parameters())).device
-
-    def forward(self, ranks: Tensor) -> FIRETensor:
-        """
-        Args:
-            ranks (Tensor): (n, ) of word ranks
-
-        Returns:
-            (Functional, Measure)
-        """
-        if not isinstance(ranks, Tensor):
-            ranks = torch.tensor(ranks, device=self.detect_device(), dtype=torch.long)
-
-        with Timer(elapsed, "slicing", sync_cuda=True), Timer(
-            elapsed, "slicing", sync_cuda=True, relative=False
-        ):
-            func = self.funcs[ranks]
-            measure = self.measures[ranks]
-        return FIRETensor(func, measure)
-
-    def __getitem__(self, words: Union[str, List[str]]) -> FIRETensor:
+    def __getitem__(self, words: Union[str, List[str]]) -> FireTensor:
         """
         Args:
             words (str or List[str]): a word or a list of words
@@ -123,7 +156,7 @@ class FIREWord(Module):
             assert m.shape == meshx.shape
         stack = int(np.prod(meshx.shape))
 
-        func, _ = self[[word] * stack]
+        ft: FireTensor = self[[word] * stack]
         measure = DiracMixture(self.dim, 1, limits=None, shape=(stack,)).to(
             self.detect_device()
         )
@@ -135,7 +168,7 @@ class FIREWord(Module):
         )
         measure.m.copy_(torch.ones(stack, 1, dtype=torch.float32))
 
-        outputs = measure.integral(func)  # (stack, 1)
+        outputs = measure.integral(ft.funcs)  # (stack, 1)
         outputs = outputs.view(*meshx.shape)
         return outputs
 
@@ -187,8 +220,8 @@ class FIREWord(Module):
                 corresponding word pair is a positive or a negative sample.
         """
 
-        x1: FIRETensor = self.forward(pairs[..., 0])
-        x2: FIRETensor = self.forward(pairs[..., 1])
+        x1: FireTensor = self.forward(pairs[..., 0])
+        x2: FireTensor = self.forward(pairs[..., 1])
 
         loss = Loss()
 
@@ -213,46 +246,41 @@ class FIREWord(Module):
 
         return loss
 
+    @staticmethod
+    def from_pretrained(dirpath) -> FireWord:
+        dirpath = os.path.abspath(dirpath)
+        if not os.path.exists(dirpath):
+            raise FileNotFoundError(f"Directory not found at {dirpath}")
 
-class FIRETensor:
-    def __init__(self, funcs: Functional, measures: Measure):
-        assert funcs.shape == measures.shape
-        self.funcs: Functional = funcs
-        self.measures: Measure = measures
+        # config
+        with open(f"{dirpath}/config.json", "rt") as f:
+            config = FireWordConfig(**json.load(f))
 
-    def __getitem__(self, index: IndexLike) -> FIRETensor:
-        return FIRETensor(self.funcs[index], self.measures[index])
+        # vocab
+        vocab = Vocab.from_json(f"{dirpath}/vocab.json")
 
-    def view(self, *shape, inplace=False) -> FIRETensor:
-        if inplace:
-            self.funcs.view(*shape, inplace=True)
-            return self
+        # state_dict
+        word = FireWord(config=config, vocab=vocab)
+        state_dict = torch.load(f"{dirpath}/pytorch_model.bin")
+        word.load_state_dict(state_dict)
+        return word
+
+    def save(self, dirpath):
+        dirpath = os.path.abspath(dirpath)
+        if os.path.exists(dirpath):
+            logger.warn(f"Overwriting files in directory {dirpath}.")
         else:
-            return FIRETensor(
-                funcs=self.funcs.view(*shape, inplace=False),
-                measures=self.measures.view(*shape, inplace=False),
-            )
+            os.makedirs(dirpath, exist_ok=True)
 
-    def __mul__(self, other: FIRETensor):
-        if id(other) == id(self):
-            return self.measures.integral(self.funcs) * 2
-        else:
-            return other.measures.integral(self.funcs) + self.measures.integral(
-                other.funcs
-            )
+        # config
+        with open(f"{dirpath}/config.json", "wt") as f:
+            json.dump(self.config, f)
 
-    def __matmul__(self, other: FIRETensor):
-        if id(other) == id(self):
-            mat = self.measures.integral(self.funcs, cross=True)
-            return mat + torch.transpose(mat, -2, -1)
-        else:
-            return other.measures.integral(self.funcs, cross=True) + torch.transpose(
-                self.measures.integral(other.funcs, cross=True), -2, -1
-            )
+        # vocab
+        self.vocab.to_json(f"{dirpath}/vocab.json")
 
-    def __repr__(self):
-        return (
-            f"<FIRETensor(funcs={self.funcs.__class__.__name__}, "
-            f"measures={self.measures.__class__.__name__}), "
-            f"shape={self.funcs.shape}>"
-        )
+        # state_dict
+        torch.save(self.state_dict(), f"{dirpath}/pytorch_model.bin")
+
+
+FIREWord = FireWord
