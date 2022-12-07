@@ -70,14 +70,15 @@ class FireEmbedding(Module):
         return next(iter(self.parameters())).device
 
 
-class FireWordConfig(dict):
+class FireWordConfig:
     dim: int
     func: str
     measure: str
 
-    def __init__(self, **kwargs):
-        dict.__init__(self, **kwargs)
-        self.__dict__ = self
+    def __init__(self, dim: int, func: str, measure: str):
+        self.dim = dim
+        self.func = func
+        self.measure = measure
 
 
 class FireWord(FireEmbedding):
