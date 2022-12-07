@@ -3,19 +3,17 @@ from pathlib import Path
 import os
 import getpass
 import wandb
-import logging
 
-wandb_dir = f'/tmp/firelang_wandb_{getpass.getuser()}'
+wandb_dir = f"/tmp/firelang_wandb_{getpass.getuser()}"
 os.makedirs(wandb_dir, exist_ok=True)
 
 settings = {
-    'WANDB_ENTITY': 'allen',  # replace this with your WANDB account name
-    'WANDB_DIR': wandb_dir,
-
+    "WANDB_ENTITY": "allen",  # replace this with your WANDB account name
+    "WANDB_DIR": wandb_dir,
     # ----- cloud -----
-    'WANDB_API_KEY': 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',   # replace this with your own WANDB API KEY
-    'WANDB_PROJECT': 'firelang',  # you can change this to the name you like
-    'WANDB_BASE_URL': 'https://api.wandb.ai/',
+    "WANDB_API_KEY": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",  # replace this with your own WANDB API KEY
+    "WANDB_PROJECT": "firelang",  # you can change this to the name you like
+    "WANDB_BASE_URL": "https://api.wandb.ai/",
 }
 
 api = None
