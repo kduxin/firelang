@@ -49,7 +49,7 @@ class FireEmbedding(Module):
     def __len__(self):
         return self.vocab_size
 
-    def forward(self, ranks: Tensor) -> FireTensor:
+    def forward(self, ranks: Tensor = None) -> FireTensor:
         """
         Args:
             ranks (Tensor): (n, ) of word ranks
@@ -58,9 +58,12 @@ class FireEmbedding(Module):
             (Functional, Measure)
         """
 
-        with Timer(elapsed, "slicing", sync_cuda=True), Timer(
-            elapsed, "slicing", sync_cuda=True, relative=False
-        ):
+        if ranks is None:
+            return FireTensor(
+                funcs=self.funcs,
+                measures=self.measures,
+            )
+        else:
             return FireTensor(
                 funcs=self.funcs[ranks],
                 measures=self.measures[ranks],
@@ -244,10 +247,16 @@ class FireWord(FireEmbedding):
             s[~labels] = -s[~labels]
             loss.add("sinkhorn", s * args.sinkhorn_weight)
 
+        if hasattr(args, "l1reg_weight") and args.l1reg_weight > 0.0:
+            params1 = [p.reshape(-1) for p in x1.funcs.parameters()]
+            params2 = [p.reshape(-1) for p in x2.funcs.parameters()]
+            norm = torch.stack(params1 + params2).abs().mean()
+            loss.add("l1reg", norm * args.l1reg_weight)
+
         return loss
 
     @staticmethod
-    def from_pretrained(dirpath) -> FireWord:
+    def from_pretrained(dirpath, strict: bool = True) -> FireWord:
         dirpath = os.path.abspath(dirpath)
         if not os.path.exists(dirpath):
             raise FileNotFoundError(f"Directory not found at {dirpath}")
@@ -262,7 +271,7 @@ class FireWord(FireEmbedding):
         # state_dict
         word = FireWord(config=config, vocab=vocab)
         state_dict = torch.load(f"{dirpath}/pytorch_model.bin")
-        word.load_state_dict(state_dict)
+        word.load_state_dict(state_dict, strict=strict)
         return word
 
     def save(self, dirpath):
@@ -274,7 +283,7 @@ class FireWord(FireEmbedding):
 
         # config
         with open(f"{dirpath}/config.json", "wt") as f:
-            json.dump(self.config, f)
+            json.dump(self.config.__dict__, f)
 
         # vocab
         self.vocab.to_json(f"{dirpath}/vocab.json")

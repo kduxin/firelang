@@ -8,7 +8,7 @@ import torch
 from torch import Tensor
 from torch.nn import Module, ModuleList, ModuleDict
 from .utils.index import IndexLike
-from .utils.shape import parse_shape
+from .utils.timer import Timer, elapsed
 
 __all__ = [
     "clear_cache",
@@ -61,50 +61,54 @@ class StackingSlicing(Module):
             "initialization argument."
         )
 
+    @Timer(elapsed, "slice", relative=False)
     def __getitem__(self, index: IndexLike):
         new_shape = tuple(torch.empty(self.shape)[index].shape)
         to: StackingSlicing = self.restack(new_shape)
 
-        # A parameter not listed in `unsliceable_params` should be
-        # sliced and copied. Otherwise, the whole parameter is copied.
-        for name, param in self.named_parameters(recurse=False):
-            param_to = to.get_parameter(name)
-            param_to.requires_grad_(False)
-            if name in self.unsliceable_params:
-                param_to.copy_(param)
-            else:
-                param_to.copy_(param[index])
+        with Timer(elapsed, "copy", relative=False):
+            # A parameter not listed in `unsliceable_params` should be
+            # sliced and copied. Otherwise, the whole parameter is copied.
+            for name, param in self.named_parameters(recurse=False):
+                param_to = to.get_parameter(name)
+                param_to.requires_grad_(False)
+                if name in self.unsliceable_params:
+                    param_to.copy_(param)
+                else:
+                    param_to.copy_(param[index])
 
-        # A submodule that is a `StackingSlicing` should be sliced
-        # and copied. Otherwise, the whole submodule is copied.
-        for name, module in self.named_children():
-            submod_to: Module = to.get_submodule(name)
-            submod_to.requires_grad_(False)
+            # A submodule that is a `StackingSlicing` should be sliced
+            # and copied. Otherwise, the whole submodule is copied.
+            for name, module in self.named_children():
+                submod_to: Module = to.get_submodule(name)
+                submod_to.requires_grad_(False)
 
-            if isinstance(module, StackingSlicing):
-                submod_from: Module = module.__getitem__(index)
-            elif isinstance(module, ModuleList):
-                submod_from = ModuleList(
-                    [
-                        entry[index] if isinstance(entry, StackingSlicing) else entry
-                        for entry in module
-                    ]
-                )
-            elif isinstance(module, ModuleDict):
-                submod_from = ModuleDict(
-                    {
-                        key: entry[index]
-                        if isinstance(entry, StackingSlicing)
-                        else entry
-                        for key, entry in module.items()
-                    }
-                )
-            else:
-                submod_from: Module = module
-            submod_from.shape = new_shape
-            setattr(to, name, submod_from)
+                if isinstance(module, StackingSlicing):
+                    submod_from: Module = module.__getitem__(index)
+                elif isinstance(module, ModuleList):
+                    submod_from = ModuleList(
+                        [
+                            entry[index]
+                            if isinstance(entry, StackingSlicing)
+                            else entry
+                            for entry in module
+                        ]
+                    )
+                elif isinstance(module, ModuleDict):
+                    submod_from = ModuleDict(
+                        {
+                            key: entry[index]
+                            if isinstance(entry, StackingSlicing)
+                            else entry
+                            for key, entry in module.items()
+                        }
+                    )
+                else:
+                    submod_from: Module = module
+                submod_from.shape = new_shape
+                setattr(to, name, submod_from)
 
-        to.shape = new_shape
+            to.shape = new_shape
         return to
 
     def detect_device(self):
@@ -135,6 +139,7 @@ class StackingSlicing(Module):
         name_shapes = [(name, p.shape) for name, p in self.named_parameters()]
         return hash(tuple(name_shapes))
 
+    @Timer(elapsed, "restack", relative=False)
     def restack(
         self,
         *shape: int | Tuple[int],
@@ -144,12 +149,17 @@ class StackingSlicing(Module):
         if len(shape) == 1 and isinstance(shape[0], Iterable):
             shape = tuple(shape[0])
 
+        device = self.detect_device()
+        init_locals = self.init_locals
+        if "device" in init_locals:
+            init_locals["device"] = device
+
         tag = f"stacked/{self.__class__.__name__}-{self._parameter_shape_hash()}"
         if use_cached and shape in _cache[tag]:
             new = deepcopy(_cache[tag][shape])
         else:
             positional, keywords = self._recover_args_from_locals(
-                locals_=self.init_locals,
+                locals_=init_locals,
             )
             new = self.__class__(
                 *positional,
@@ -194,5 +204,4 @@ class StackingSlicing(Module):
     @property
     def ndim(self) -> int:
         return len(self.shape)
-
 

@@ -55,10 +55,11 @@ class Functional(StackingSlicing):
         # prevm = [p for p in prev if isinstance(p, Module)]
         # self.prevm = ModuleList(prevm) if len(prevm) else prevm
         # self.prev = prev
-        self.operator = cached_forward(
-            self.forward if operator is None else operator,
-            identifier=f"{self.__class__.__name__} (id={id(self)})",
-        )
+        # self.operator = cached_forward(
+        #     self.forward if operator is None else operator,
+        #     identifier=f"{self.__class__.__name__} (id={id(self)})",
+        # )
+        self.operator = self.forward if operator is None else operator
         self.is_fleaf = is_fleaf
 
     def _sanity_check(self):
