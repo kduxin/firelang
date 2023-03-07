@@ -248,7 +248,7 @@ class FireWord(FireEmbedding):
         return loss
 
     @staticmethod
-    def from_pretrained(dirpath) -> FireWord:
+    def from_pretrained(dirpath, strict: bool = True) -> FireWord:
         dirpath = os.path.abspath(dirpath)
         if not os.path.exists(dirpath):
             raise FileNotFoundError(f"Directory not found at {dirpath}")
@@ -263,7 +263,7 @@ class FireWord(FireEmbedding):
         # state_dict
         word = FireWord(config=config, vocab=vocab)
         state_dict = torch.load(f"{dirpath}/pytorch_model.bin")
-        word.load_state_dict(state_dict)
+        word.load_state_dict(state_dict, strict=strict)
         return word
 
     def save(self, dirpath):
@@ -275,7 +275,7 @@ class FireWord(FireEmbedding):
 
         # config
         with open(f"{dirpath}/config.json", "wt") as f:
-            json.dump(self.config, f)
+            json.dump(self.config.__dict__, f)
 
         # vocab
         self.vocab.to_json(f"{dirpath}/vocab.json")
