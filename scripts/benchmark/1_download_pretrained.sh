@@ -1,4 +1,4 @@
-BASE_URL="https://www.cl.rcast.u-tokyo.ac.jp/~duxin/firelang/pretrained/word/"
+BASE_URL="https://www.l.sci.waseda.ac.jp/member/duxin/firelang/pretrained/word/"
 VERSION="v1.1/"
 MODEL_23="wacky_mlplanardiv_d2_l4_k1_polysemy.tar.gz"
 MODEL_50="wacky_mlplanardiv_d2_l4_k10.tar.gz"
