@@ -1,25 +1,20 @@
 from __future__ import annotations
 from typing import List
-import argparse
-import os
-import sys
-import io
-import random
-import numpy as np
 from string import ascii_uppercase, digits
 from contextlib import nullcontext
+import argparse
+import os
+import io
+import random
+import json
 import matplotlib
-
-matplotlib.use("Agg")
-from matplotlib import pyplot as plt
-
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from torch.optim import AdamW, Adam, SGD, Adagrad
 from torch.optim.lr_scheduler import OneCycleLR
-from torch.cuda.amp import autocast
-from torch.cuda.amp.grad_scaler import GradScaler
 
-from corpusit import Vocab, SkipGramDataset
+from corpusit import SkipGramConfigWithTokenization
 from firelang import FireWord, FireWordConfig, FireTensor
 from firelang.utils.optim import DummyScheduler
 from firelang.utils.log import logger
@@ -30,6 +25,9 @@ from scripts.benchmark import (
     load_word_benchmark,
     benchmark_word_similarity,
 )
+from scripts.dataloader import DataLoader
+
+matplotlib.use("Agg")
 
 
 logger.setLevel(level=os.environ.get("LOGLEVEL", "DEBUG").upper())
@@ -38,7 +36,7 @@ try:
     import wandb
     from wandb_config import download_wandb_files
 except Exception as e:
-    logger.warn(
+    logger.warning(
         "Unable to import wandb for experiment tracking. "
         "Consider executing `pip install wandb`."
     )
@@ -60,35 +58,72 @@ def train(args):
     device = "cuda" if (torch.cuda.is_available() and not args.cpu) else "cpu"
 
     if args.task == "skipgram":
-        vocab_args = {
-            "min_count": args.min_count,
-            "unk": args.unk,
-        }
-        if args.vocab_path_json is not None:
-            vocab = Vocab.from_json(args.vocab_path_bin, **vocab_args)
-        elif os.path.exists(args.corpus_path + ".vocab.bin"):
-            vocab = Vocab.from_bin(args.corpus_path + ".vocab.bin", **vocab_args)
-        elif os.path.exists(args.corpus_path + ".vocab.json"):
-            vocab = Vocab.from_json(args.corpus_path + ".vocab.json", **vocab_args)
-        else:
+        
+        # Try to load vocab and word counts
+        vocab_path = args.corpus_path + ".vocab.json"
+        word_counts_path = args.corpus_path + ".word_counts.json"
+        
+        if not os.path.exists(vocab_path):
             raise ValueError(
-                "Vocab not found at `${corpus_path}.vocab.bin` "
-                "or at `${corpus_path}.vocab.json`. "
-                "You need to build the vocabulary first."
+                f"Vocab file not found at {vocab_path}. "
+                "You need to build the vocabulary first using build_vocab.py."
             )
-        dataset = SkipGramDataset(
-            args.corpus_path,
-            vocab=vocab,
+        if not os.path.exists(word_counts_path):
+            raise ValueError(
+                f"Word counts file not found at {word_counts_path}. "
+                "You need to build the vocabulary first using build_vocab.py."
+            )
+        
+        # Load vocabulary
+        with open(vocab_path, 'r') as f:
+            vocab_data = json.load(f)
+        
+        # Load word counts
+        with open(word_counts_path, 'r') as f:
+            word_counts_data = json.load(f)
+        
+        # Convert string keys to integers for word_counts
+        word_counts = {int(k): v for k, v in word_counts_data.items()}
+        
+        # Create word_to_id mapping
+        word_to_id = vocab_data['s2i']
+        
+        # Create dataset configuration
+        config = SkipGramConfigWithTokenization(
+            word_counts=word_counts,
+            word_to_id=word_to_id,
+            separator=" ",
             win_size=args.win_size,
-            sep=" ",
-            mode=args.read_mode,
             subsample=args.subsample,
             power=args.power,
             n_neg=args.n_neg,
         )
+        
+        # Create sampler
+        dataset = config.sampler(args.seed, num_threads=4)
+        
+        # Create vocab object for model (we'll need to create a simple wrapper)
+        class SimpleVocab:
+            def __init__(self, s2i, i2s):
+                self.s2i = s2i
+                self.i2s = i2s
+                self.special_name2i = vocab_data.get('special_name2i', {})
+            
+            def __len__(self):
+                return len(self.s2i)
+            
+            def __getitem__(self, key):
+                if isinstance(key, str):
+                    return self.s2i.get(key, self.special_name2i.get('<unk>', 0))
+                else:
+                    return self.i2s.get(key, '<unk>')
+        
+        vocab = SimpleVocab(vocab_data['s2i'], vocab_data['i2s'])
     else:
         raise ValueError(f"Failed to recognize task == {args.task}")
-    dataloader = dataset.sampler(args.sz_batch, args.seed)
+    # Create a more efficient dataloader
+    
+    dataloader = DataLoader(dataset, args.sz_batch, args.corpus_path, args.read_mode)
     logger.info(f"Dataset initialized with a dictionary of size {len(vocab)} .")
 
     set_seed(args.seed)
@@ -145,11 +180,6 @@ def train(args):
         for bname in benchmarks
     }
 
-    if args.amp:
-        scaler = GradScaler()
-        autocaster = autocast()
-    else:
-        autocaster = nullcontext()
     if args.profile:
         prof = torch.autograd.profiler.profile(use_cuda=True)
     else:
@@ -164,11 +194,14 @@ def train(args):
             inputs = torch.tensor(
                 inputs, dtype=torch.long, device=device
             )  # (sz_batch, 2) int
+            # Convert numpy bool to Python bool to avoid compatibility issues
+            labels = [bool(label) for label in labels]
             labels = torch.tensor(
                 labels, dtype=torch.bool, device=device
             )  # labels: (sz_batch, ) bool
         """ ----------------- forward pass -------------------"""
-        with prof, autocaster, Timer(elapsed, "forward", sync_cuda=True):
+
+        with prof, Timer(elapsed, "forward", sync_cuda=True):
             if args.task == "skipgram":
                 if args.model.lower() == "fireword":
                     model: FireWord
@@ -188,10 +221,7 @@ def train(args):
             logger.debug(prof.key_averages().table(sort_by="self_cpu_time_total"))
         """ ----------------- backward pass -------------------"""
         with prof, Timer(elapsed, "backward", sync_cuda=True):
-            if args.amp:
-                scaler.scale(steploss).backward()
-            else:
-                steploss.backward()
+            steploss.backward()
 
             grad_norm = (
                 torch.cat([p.grad.data.reshape(-1) for p in model.parameters()])
@@ -216,11 +246,7 @@ def train(args):
                             print(f"Fixed nan/inf values in grad of {name}")
                             print(f"  grad = {p.grad}")
 
-                    if args.amp:
-                        scaler.step(optimizer)
-                        scaler.update()
-                    else:
-                        optimizer.step()
+                    optimizer.step()
 
                 with Timer(elapsed, "lrstep", sync_cuda=True):
                     scheduler.step()
