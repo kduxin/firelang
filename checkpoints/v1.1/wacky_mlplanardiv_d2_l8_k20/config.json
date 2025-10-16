@@ -1,0 +1,1 @@
+{"dim": 2, "func": "MLPlanarDivFast(dim, 8).neg()", "measure": "DiracMixture(dim, 20, limits=[-4.0, 4.0])"}
