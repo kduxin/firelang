@@ -75,15 +75,9 @@ naturally separated with FIRE.  Figure (right): overlapped semantic fields of
 
 ## 1. Download pre-trained models
 We provide the following pre-trained FIRE models:
-- [$D=2,L=4,L=1$](https://www.cl.rcast.u-tokyo.ac.jp/~duxin/firelang/pretrained/word/wacky_mlplanardiv_d2_l4_k1_polysemy.gz) (23 parameters per word)
-- [$D=2,L=4,L=10$](https://www.cl.rcast.u-tokyo.ac.jp/~duxin/firelang/pretrained/word/wacky_mlplanardiv_d2_l4_k10.gz) (50 parameters per word)
-- [$D=2,L=8,L=20$](https://www.cl.rcast.u-tokyo.ac.jp/~duxin/firelang/pretrained/word/wacky_mlplanardiv_d2_l8_k20.gz) (100 parameters per word)
-
-You can run the following to download the three.
-```bash
-$ bash scripts/benchmark/1_download_pretrained.sh
-```
-The models will be downloaded to `checkpoints/` and decompressed.
+- [$D=2,L=4,L=1$](checkpoints/v1.1/wacky_mlplanardiv_d2_l4_k1_polysemy/) (23 parameters per word)
+- [$D=2,L=4,L=10$](checkpoints/v1.1/wacky_mlplanardiv_d2_l4_k10/) (50 parameters per word)
+- [$D=2,L=8,L=20$](checkpoints/v1.1/wacky_mlplanardiv_d2_l8_k20/) (100 parameters per word)
 
 The saved models can be reloaded by
 ```python
