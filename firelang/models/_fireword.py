@@ -17,7 +17,7 @@ from firelang.utils.log import logger
 from firelang.utils.parse import parse_func, parse_measure
 from . import FireTensor
 
-from corpusit import Vocab
+# Removed corpusit.Vocab dependency
 
 __all__ = [
     "FireEmbedding",
@@ -57,7 +57,6 @@ class FireEmbedding(Module):
         Returns:
             (Functional, Measure)
         """
-
         if ranks is None:
             return FireTensor(
                 funcs=self.funcs,
@@ -86,12 +85,12 @@ class FireWordConfig(dict):
 class FireWord(FireEmbedding):
 
     config: FireWordConfig
-    vocab: Vocab
+    vocab: object  # Changed from Vocab to generic object
 
     def __init__(
         self,
         config: FireWordConfig,
-        vocab: Vocab,
+        vocab: object,  # Changed from Vocab to generic object
     ):
         FireEmbedding.__init__(
             self,
@@ -105,7 +104,18 @@ class FireWord(FireEmbedding):
         self.vocab_size = len(vocab)
 
     def _ranking(self, vocab):
-        ids = sorted(vocab.i2s_dict().keys())
+        # Handle both old corpusit.Vocab and new SimpleVocab interface
+        if hasattr(vocab, 'i2s_dict'):
+            # Old corpusit.Vocab interface
+            ids = sorted(vocab.i2s_dict().keys())
+        else:
+            # New SimpleVocab interface
+            ids = sorted(vocab.i2s.keys())
+        
+        # Convert string IDs to integers if necessary
+        if isinstance(ids[0], str):
+            ids = [int(id_str) for id_str in ids]
+        
         maxid = max(ids)
         i2rank = -np.ones(maxid + 1, dtype=np.int64)
         rank2i = -np.ones(len(ids), dtype=np.int64)
@@ -124,7 +134,13 @@ class FireWord(FireEmbedding):
         """
 
         s2i = self.vocab.s2i
-        unk_id = self.vocab.unk_id
+        # Handle both old and new vocab interfaces
+        if hasattr(self.vocab, 'unk_id'):
+            unk_id = self.vocab.unk_id
+        else:
+            # For SimpleVocab, use special_name2i
+            unk_id = self.vocab.special_name2i.get('<unk>', 0)
+        
         if isinstance(words, str):  # only one word
             ids = [s2i.get(words, unk_id)]
         elif isinstance(words, list):
@@ -198,11 +214,16 @@ class FireWord(FireEmbedding):
         # adjust with word frequency
         vocab = self.vocab
         if p is not None:
-            counts = torch.tensor(
-                [vocab.i2count[self.rank2i[rank]] for rank in range(len(vocab))],
-                dtype=torch.float32,
-                device=sims.device,
-            )
+            # Handle both old and new vocab interfaces
+            if hasattr(vocab, 'i2count'):
+                counts = torch.tensor(
+                    [vocab.i2count[self.rank2i[rank]] for rank in range(len(vocab))],
+                    dtype=torch.float32,
+                    device=sims.device,
+                )
+            else:
+                # For SimpleVocab, we don't have word counts, use uniform weights
+                counts = torch.ones(len(vocab), dtype=torch.float32, device=sims.device)
             sims = sims * (counts**p)
 
         topk = sims.topk(k)
@@ -265,8 +286,25 @@ class FireWord(FireEmbedding):
         with open(f"{dirpath}/config.json", "rt") as f:
             config = FireWordConfig(**json.load(f))
 
-        # vocab
-        vocab = Vocab.from_json(f"{dirpath}/vocab.json")
+        # vocab - load from JSON file
+        with open(f"{dirpath}/vocab.json", 'r') as f:
+            vocab_data = json.load(f)
+        
+        # Create SimpleVocab-like object
+        class SimpleVocab:
+            def __init__(self, s2i, i2s, special_name2i=None):
+                self.s2i = s2i
+                self.i2s = i2s
+                self.special_name2i = special_name2i or {}
+            
+            def __len__(self):
+                return len(self.s2i)
+        
+        vocab = SimpleVocab(
+            s2i=vocab_data['s2i'],
+            i2s=vocab_data['i2s'],
+            special_name2i=vocab_data.get('special_name2i', {})
+        )
 
         # state_dict
         word = FireWord(config=config, vocab=vocab)
@@ -285,8 +323,14 @@ class FireWord(FireEmbedding):
         with open(f"{dirpath}/config.json", "wt") as f:
             json.dump(self.config.__dict__, f)
 
-        # vocab
-        self.vocab.to_json(f"{dirpath}/vocab.json")
+        # vocab - save as JSON
+        vocab_data = {
+            's2i': self.vocab.s2i,
+            'i2s': self.vocab.i2s,
+            'special_name2i': getattr(self.vocab, 'special_name2i', {})
+        }
+        with open(f"{dirpath}/vocab.json", 'w') as f:
+            json.dump(vocab_data, f, indent=2)
 
         # state_dict
         torch.save(self.state_dict(), f"{dirpath}/pytorch_model.bin")

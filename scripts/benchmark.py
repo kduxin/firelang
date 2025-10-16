@@ -3,7 +3,7 @@ import argparse
 import os
 from collections.abc import Callable
 from collections import defaultdict, Counter
-from corpusit import Vocab
+# Removed corpusit.Vocab dependency
 import nltk
 import numpy as np
 import pandas as pd
@@ -214,7 +214,7 @@ _cache = defaultdict(dict)
 def benchmark_word_similarity(
     model: FireWord, benchmarks: Mapping[str, SimilarityBenchmark]
 ):
-    vocab: Vocab = model.vocab
+    vocab = model.vocab  # Changed from Vocab type annotation
     device = model.detect_device()
 
     scores = {}
@@ -229,8 +229,14 @@ def benchmark_word_similarity(
 
             pair = []
             for w in [word1, word2]:
-                pair.append(vocab.s2i.get(w, vocab.unk_id))
-                if w not in vocab:
+                # Handle both old and new vocab interfaces
+                if hasattr(vocab, 'unk_id'):
+                    unk_id = unk_token_id
+                else:
+                    unk_id = vocab.special_name2i.get('<unk>', 0)
+                
+                pair.append(vocab.s2i.get(w, unk_id))
+                if w not in vocab.s2i:
                     oov_words.add(w)
             pairs.append(pair)
 
@@ -411,9 +417,21 @@ def benchmark_sentence_similarity(
     benchmarks: Mapping[str, SimilarityBenchmark],
     sif_alpha=1e-3,
 ):
-    vocab: Vocab = model.vocab
+    vocab = model.vocab  # Changed from Vocab type annotation
 
-    counts = pd.Series(vocab.counts_dict())
+    # Handle both old and new vocab interfaces for unk token
+    if hasattr(vocab, 'unk'):
+        unk_token = vocab.unk
+    else:
+        unk_token = '<unk>'
+
+    # Handle both old and new vocab interfaces
+    if hasattr(vocab, 'counts_dict'):
+        counts = pd.Series(vocab.counts_dict())
+    else:
+        # For SimpleVocab, we don't have word counts, use uniform weights
+        counts = pd.Series({word: 1.0 for word in vocab.s2i.keys()})
+    
     probs = counts / counts.sum()
     sif_weights: Mapping[str, float] = {
         w: sif_alpha / (sif_alpha + prob) for w, prob in probs.items()
@@ -427,7 +445,7 @@ def benchmark_sentence_similarity(
         sents2 = benchmark.wordseqs2
         allsents = sents1 + sents2
         allsents = [
-            [w for w in sent if w in sif_weights and w != vocab.unk]
+            [w for w in sent if w in sif_weights and w != unk_token]
             for sent in allsents
         ]
 
@@ -536,9 +554,21 @@ def load_all_wic_benchmarks(
 def benchmark_word_in_context(
     model, benchmarks: Mapping[str, WordInContextBenchmark], sif_alpha=1e-3
 ):
-    vocab: Vocab = model.vocab
+    vocab = model.vocab  # Changed from Vocab type annotation
 
-    counts = pd.Series(vocab.counts_dict())
+    # Handle both old and new vocab interfaces for unk token
+    if hasattr(vocab, 'unk'):
+        unk_token = vocab.unk
+    else:
+        unk_token = '<unk>'
+
+    # Handle both old and new vocab interfaces
+    if hasattr(vocab, 'counts_dict'):
+        counts = pd.Series(vocab.counts_dict())
+    else:
+        # For SimpleVocab, we don't have word counts, use uniform weights
+        counts = pd.Series({word: 1.0 for word in vocab.s2i.keys()})
+    
     probs = counts / counts.sum()
     sif_weights: Mapping[str, float] = {
         w: sif_alpha / (sif_alpha + prob) for w, prob in probs.items()
@@ -553,7 +583,7 @@ def benchmark_word_in_context(
         N = len(sents1)
         allsents = sents1 + sents2
         allsents = [
-            [w for w in sent if w in sif_weights and w != vocab.unk]
+            [w for w in sent if w in sif_weights and w != unk_token]
             for sent in allsents
         ]
 
@@ -637,7 +667,13 @@ def benchmark_wordsense_number(
 
     """ get most frequent words """
     vocab = model.vocab
-    wordcounts = sorted(vocab.counts_dict().items(), key=lambda x: x[1], reverse=True)
+    # Handle both old and new vocab interfaces
+    if hasattr(vocab, 'counts_dict'):
+        wordcounts = sorted(vocab.counts_dict().items(), key=lambda x: x[1], reverse=True)
+    else:
+        # For SimpleVocab, we don't have word counts, use uniform weights
+        wordcounts = [(word, 1.0) for word in vocab.s2i.keys()]
+    
     freqwords = [key for key, val in wordcounts[:nfreqwords]]
 
     """ polysemy prediction """

@@ -51,6 +51,9 @@ naturally separated with FIRE.  Figure (right): overlapped semantic fields of
 - Python >= 3.7
 - Packages
   ```bash
+  # With CUDA 12 or later
+  $ pip install -r requirements.txt
+
   # With CUDA 11 
   $ pip install -r requirements-cu11.txt
 

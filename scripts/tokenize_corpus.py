@@ -48,7 +48,7 @@ def run(args):
             else:
                 return [sos] + word_tokenize(line) + [eos]
 
-        def linecutter(lines, maxlen=10000):
+        def _linecutter(lines, maxlen=10000):
             for line in lines:
                 nseg = (len(line) + maxlen - 1) // maxlen
                 for i in range(nseg):
@@ -59,7 +59,7 @@ def run(args):
         with open(corpus_path, "rt") as f:
             for tokens in tqdm.tqdm(
                 yielder(
-                    linecutter(f),
+                    _linecutter(f),
                     _tokenize,
                     num_workers=args.num_workers,
                     additional_kwds={"sos": args.sos, "eos": args.eos},

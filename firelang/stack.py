@@ -63,7 +63,7 @@ class StackingSlicing(Module):
 
     @Timer(elapsed, "slice", relative=False)
     def __getitem__(self, index: IndexLike):
-        new_shape = tuple(torch.empty(self.shape)[index].shape)
+        new_shape = tuple(torch.empty(self.shape)[index.cpu()].shape)
         to: StackingSlicing = self.restack(new_shape)
 
         with Timer(elapsed, "copy", relative=False):

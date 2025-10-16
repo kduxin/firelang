@@ -14,7 +14,7 @@ def parse_func(name: str, args: Namespace = Namespace(), **kwargs):
     for nameseg in segs:
         seg = eval(nameseg)
         funcsegs.append(seg)
-    return firelang.function.Sequential(funcsegs)
+    return firelang.Sequential(funcsegs)
 
 
 def parse_measure(name, args: Namespace = Namespace(), **kwargs):
