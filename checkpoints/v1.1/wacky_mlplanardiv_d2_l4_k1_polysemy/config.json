@@ -1,1 +1,3 @@
-{"dim": 2, "func": "MLPlanarDivFast(dim, 4).neg()", "measure": "DiracMixture(dim, 1, limits=[-4.0, 4.0])"}
+version https://git-lfs.github.com/spec/v1
+oid sha256:c6997b2ba042911250aacfe6ec3edab7b5844529a93b80a1a2131b2c61a1abc4
+size 106
