@@ -1,0 +1,14 @@
+corpusit==0.2.0
+faster_fifo<=1.2.0
+nltk<=3.7
+numpy
+scipy
+numba
+pandas
+scikit_learn
+torch
+tqdm
+rich
+typing_extensions==4.4.0
+matplotlib==3.5.3
+wandb
