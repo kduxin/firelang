@@ -9,6 +9,6 @@ scikit_learn
 torch
 tqdm
 rich
-typing_extensions==4.4.0
-matplotlib==3.5.3
+typing_extensions
+matplotlib
 wandb
